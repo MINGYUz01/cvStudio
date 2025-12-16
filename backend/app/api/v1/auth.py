@@ -9,11 +9,39 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.core.config import settings
 from app.core.security import create_access_token
-from app.schemas.user import UserLogin, UserResponse, Token
-from app.services.auth_service import authenticate_user
+from app.schemas.user import UserLogin, UserResponse, Token, UserCreate
+from app.services.auth_service import authenticate_user, create_user
 from app.core.security import verify_token
+from app.dependencies import get_current_active_user
+from app.models.user import User
 
 router = APIRouter()
+
+
+@router.post("/register", response_model=UserResponse)
+async def register(user_data: UserCreate, db: Session = Depends(get_db)):
+    """
+    用户注册
+
+    Args:
+        user_data: 用户注册数据
+        db: 数据库会话
+
+    Returns:
+        创建的用户信息
+
+    Raises:
+        HTTPException: 用户名或邮箱已存在时
+    """
+    user = create_user(db, user_data)
+    return UserResponse(
+        id=user.id,
+        username=user.username,
+        email=user.email,
+        is_active=user.is_active,
+        is_superuser=user.is_superuser,
+        created_at=str(user.created_at)
+    )
 
 
 @router.post("/login", response_model=Token)
@@ -115,24 +143,27 @@ async def login_form(
     }
 
 
-@router.get("/me")
+@router.get("/me", response_model=UserResponse)
 async def get_current_user_info_endpoint(
-    db: Session = Depends(get_db)
+    current_user: User = Depends(get_current_active_user)
 ):
     """
-    获取当前用户信息（简化版本，暂不需要认证）
+    获取当前用户信息
 
     Args:
-        db: 数据库会话
+        current_user: 当前认证用户
 
     Returns:
         当前用户信息
     """
-    # 暂时返回默认用户信息用于测试
-    return {
-        "message": "用户信息接口正常工作",
-        "note": "完整认证功能将在第2天实现"
-    }
+    return UserResponse(
+        id=current_user.id,
+        username=current_user.username,
+        email=current_user.email,
+        is_active=current_user.is_active,
+        is_superuser=current_user.is_superuser,
+        created_at=str(current_user.created_at)
+    )
 
 
 @router.get("/")

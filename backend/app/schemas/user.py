@@ -3,7 +3,8 @@
 """
 
 from typing import Optional
-from pydantic import BaseModel, EmailStr
+from datetime import datetime
+from pydantic import BaseModel, EmailStr, Field
 
 
 class UserBase(BaseModel):
@@ -23,12 +24,21 @@ class UserLogin(BaseModel):
     password: str
 
 
+class UserUpdate(BaseModel):
+    """更新用户模式"""
+    username: Optional[str] = None
+    email: Optional[EmailStr] = None
+    password: Optional[str] = None
+    is_active: Optional[bool] = None
+    is_superuser: Optional[bool] = None
+
+
 class UserResponse(UserBase):
     """用户响应模式"""
     id: int
     is_active: bool
     is_superuser: bool
-    created_at: str
+    created_at: datetime = Field(..., description="创建时间")
 
     class Config:
         from_attributes = True

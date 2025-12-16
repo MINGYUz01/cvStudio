@@ -69,8 +69,7 @@ def create_application() -> FastAPI:
     
     app.include_router(
         users.router,
-        prefix=f"{settings.API_V1_STR}/users",
-        tags=["用户"]
+        prefix=settings.API_V1_STR
     )
     
     app.include_router(

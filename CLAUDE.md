@@ -13,6 +13,12 @@
 - **Git提交**：无特殊格式要求
 - **分支策略**：使用GitHub Flow
 - **代码注释**：使用Google风格的docstring
+- **测试文件管理**：
+  - 正式单元测试放在 `tests/test_` 目录下
+  - 临时测试脚本统一放在 `backend/tests/temp/` 目录下
+  - 临时测试文件命名规范：`test_功能名.py` 或 `功能名_test.py`
+  - 每个临时测试文件应包含清晰的用途说明和清理机制
+  - 定期清理不再需要的临时测试文件
 
 ## 🧪 测试与日志
 - **测试框架**：使用pytest（简单方便）
@@ -141,7 +147,8 @@ cvStudio/
 │   │   ├── conftest.py                # pytest配置
 │   │   ├── test_api/                  # API测试
 │   │   ├── test_services/             # 服务测试
-│   │   └── test_utils/                # 工具函数测试
+│   │   ├── test_utils/                # 工具函数测试
+│   │   └── temp/                      # 临时测试文件目录
 │   │
 │   ├── alembic/                       # 数据库迁移（如果需要）
 │   │   ├── versions/
