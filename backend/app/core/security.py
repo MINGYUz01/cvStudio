@@ -99,14 +99,14 @@ def get_password_hash(password: str) -> str:
 def create_password_reset_token(email: str) -> str:
     """
     创建密码重置令牌
-    
+
     Args:
         email: 用户邮箱
-        
+
     Returns:
         密码重置令牌
     """
-    delta = timedelta(hours=settings.EMAIL_RESET_TOKEN_EXPIRE_HOURS)
+    delta = timedelta(hours=1)  # 默认1小时有效期
     now = datetime.utcnow()
     expires = now + delta
     exp = expires.timestamp()
