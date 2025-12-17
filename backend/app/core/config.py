@@ -38,6 +38,8 @@ class Settings(BaseSettings):
     # 文件存储配置
     UPLOAD_DIR: str = "../data/uploads"
     DATASETS_DIR: str = "../data/datasets"
+    DATASET_STORAGE_PATH: str = "../data/datasets"
+    THUMBNAIL_STORAGE_PATH: str = "../data/thumbnails"
     MODELS_DIR: str = "../data/models"
     CHECKPOINTS_DIR: str = "../data/checkpoints"
     TEMP_DIR: str = "../data/temp"
