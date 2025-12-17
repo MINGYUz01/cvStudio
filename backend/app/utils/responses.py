@@ -2,11 +2,14 @@
 统一API响应格式工具
 """
 
-from typing import Any, Optional, List
+from typing import Any, Optional, List, Generic, TypeVar
 from datetime import datetime
 from pydantic import BaseModel
 from fastapi import status
 import json
+
+
+T = TypeVar('T')
 
 
 class CustomJSONEncoder(json.JSONEncoder):
@@ -18,22 +21,22 @@ class CustomJSONEncoder(json.JSONEncoder):
         return super().default(obj)
 
 
-class APIResponse(BaseModel):
+class APIResponse(BaseModel, Generic[T]):
     """统一API响应格式"""
     success: bool
     message: str
-    data: Optional[Any] = None
+    data: Optional[T] = None
     code: int = status.HTTP_200_OK
 
     class Config:
         from_attributes = True
 
 
-class PaginatedResponse(BaseModel):
+class PaginatedResponse(BaseModel, Generic[T]):
     """分页响应格式"""
     success: bool
     message: str
-    data: List[Any]
+    data: List[T]
     pagination: dict
     code: int = status.HTTP_200_OK
 

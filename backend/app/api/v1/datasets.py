@@ -5,7 +5,7 @@
 import os
 import shutil
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Dict
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query
 from sqlalchemy.orm import Session
 
