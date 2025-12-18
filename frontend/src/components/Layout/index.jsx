@@ -1,171 +1,236 @@
 /**
- * 主布局组件
+ * 主布局组件 - 采用现代化深色主题设计
  */
 
 import React, { useState } from 'react'
-import { Layout, Menu, Button, Avatar, Dropdown, Space } from 'antd'
-import {
-  MenuFoldOutlined,
-  MenuUnfoldOutlined,
-  DashboardOutlined,
-  DatabaseOutlined,
-  NodeIndexOutlined,
-  PlayCircleOutlined,
-  ExperimentOutlined,
-  SettingOutlined,
-  UserOutlined,
-  LogoutOutlined
-} from '@ant-design/icons'
 import { Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { useSelector, useDispatch } from 'react-redux'
 import { logout } from '@store/authSlice'
+import {
+  LayoutDashboard,
+  Database,
+  Box,
+  Activity,
+  PlayCircle,
+  Settings,
+  Menu,
+  X,
+  User,
+  LogOut,
+  ChevronRight
+} from 'lucide-react'
 import './index.css'
 
-const { Header, Sider, Content } = Layout
-
-/**
- * 主布局组件
- * 包含侧边栏、顶部导航和内容区域
- */
-const LayoutComponent = () => {
-  const [collapsed, setCollapsed] = useState(false)
+const Layout = ({ children }) => {
+  const [sidebarOpen, setSidebarOpen] = useState(true)
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const navigate = useNavigate()
   const location = useLocation()
   const dispatch = useDispatch()
   const { user } = useSelector(state => state.auth)
 
-  // 菜单项配置
-  const menuItems = [
+  // 导航菜单配置
+  const navigation = [
     {
-      key: '/dashboard',
-      icon: <DashboardOutlined />,
-      label: '仪表盘'
+      name: '仪表盘',
+      href: '/dashboard',
+      icon: LayoutDashboard,
+      current: location.pathname === '/dashboard'
     },
     {
-      key: '/datasets',
-      icon: <DatabaseOutlined />,
-      label: '数据集管理'
+      name: '数据集管理',
+      href: '/datasets',
+      icon: Database,
+      current: location.pathname === '/datasets'
     },
     {
-      key: '/models',
-      icon: <NodeIndexOutlined />,
-      label: '模型构建'
+      name: '模型构建',
+      href: '/models',
+      icon: Box,
+      current: location.pathname === '/models'
     },
     {
-      key: '/training',
-      icon: <PlayCircleOutlined />,
-      label: '训练管理'
+      name: '训练管理',
+      href: '/training',
+      icon: Activity,
+      current: location.pathname === '/training'
     },
     {
-      key: '/inference',
-      icon: <ExperimentOutlined />,
-      label: '推理测试'
+      name: '推理测试',
+      href: '/inference',
+      icon: PlayCircle,
+      current: location.pathname === '/inference'
     },
     {
-      key: '/settings',
-      icon: <SettingOutlined />,
-      label: '设置'
+      name: '设置',
+      href: '/settings',
+      icon: Settings,
+      current: location.pathname === '/settings'
     }
   ]
 
-  // 用户下拉菜单
-  const userMenuItems = [
-    {
-      key: 'profile',
-      icon: <UserOutlined />,
-      label: '个人资料'
-    },
-    {
-      type: 'divider'
-    },
-    {
-      key: 'logout',
-      icon: <LogoutOutlined />,
-      label: '退出登录'
-    }
-  ]
-
-  /**
-   * 处理菜单点击
-   * @param {Object} item - 菜单项
-   */
-  const handleMenuClick = ({ key }) => {
-    navigate(key)
+  // 处理导航点击
+  const handleNavigate = (href) => {
+    navigate(href)
+    setMobileMenuOpen(false)
   }
 
-  /**
-   * 处理用户菜单点击
-   * @param {Object} item - 菜单项
-   */
-  const handleUserMenuClick = ({ key }) => {
-    if (key === 'logout') {
-      dispatch(logout())
-      localStorage.removeItem('token')
-      navigate('/login')
-    } else if (key === 'profile') {
-      navigate('/settings/profile')
-    }
+  // 处理用户登出
+  const handleLogout = () => {
+    dispatch(logout())
+    localStorage.removeItem('token')
+    navigate('/login')
   }
 
   return (
-    <Layout className="app-layout">
-      <Sider
-        trigger={null}
-        collapsible
-        collapsed={collapsed}
-        className="app-sider"
-        width={240}
-      >
-        <div className="app-logo">
-          <h1 className={collapsed ? 'logo-collapsed' : 'logo-expanded'}>
-            {collapsed ? 'CV' : 'CV Studio'}
-          </h1>
+    <div className="app-layout">
+      {/* 侧边栏 */}
+      <aside className={`sidebar ${sidebarOpen ? 'sidebar-open' : 'sidebar-closed'} ${mobileMenuOpen ? 'mobile-open' : ''}`}>
+        {/* Logo区域 */}
+        <div className="sidebar-header">
+          <div className="logo">
+            <div className="logo-icon">
+              <Activity size={24} className="text-white" />
+            </div>
+            <h1 className={`logo-text ${sidebarOpen ? 'block' : 'hidden'}`}>
+              CV Studio
+            </h1>
+          </div>
+          <button
+            onClick={() => setSidebarOpen(!sidebarOpen)}
+            className="sidebar-toggle"
+          >
+            <Menu size={20} />
+          </button>
         </div>
-        
-        <Menu
-          theme="dark"
-          mode="inline"
-          selectedKeys={[location.pathname]}
-          items={menuItems}
-          onClick={handleMenuClick}
-        />
-      </Sider>
-      
-      <Layout className="site-layout">
-        <Header className="app-header">
-          <div className="header-left">
-            <Button
-              type="text"
-              icon={collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
-              onClick={() => setCollapsed(!collapsed)}
-              className="trigger"
-            />
+
+        {/* 导航菜单 */}
+        <nav className="sidebar-nav">
+          <div className="nav-section">
+            <h3 className="nav-section-title">核心功能</h3>
+            <div className="nav-items">
+              {navigation.slice(0, 2).map((item) => (
+                <button
+                  key={item.name}
+                  onClick={() => handleNavigate(item.href)}
+                  className={`nav-item ${item.current ? 'nav-item-active' : ''}`}
+                >
+                  <item.icon size={20} className="nav-icon" />
+                  <span className={`nav-text ${sidebarOpen ? 'block' : 'hidden'}`}>
+                    {item.name}
+                  </span>
+                  {item.current && <ChevronRight size={16} className="nav-arrow" />}
+                </button>
+              ))}
+            </div>
           </div>
-          
-          <div className="header-right">
-            <Dropdown
-              menu={{
-                items: userMenuItems,
-                onClick: handleUserMenuClick
-              }}
-              placement="bottomRight"
+
+          <div className="nav-section">
+            <h3 className="nav-section-title">工作站</h3>
+            <div className="nav-items">
+              {navigation.slice(2, 5).map((item) => (
+                <button
+                  key={item.name}
+                  onClick={() => handleNavigate(item.href)}
+                  className={`nav-item ${item.current ? 'nav-item-active' : ''}`}
+                >
+                  <item.icon size={20} className="nav-icon" />
+                  <span className={`nav-text ${sidebarOpen ? 'block' : 'hidden'}`}>
+                    {item.name}
+                  </span>
+                  {item.current && <ChevronRight size={16} className="nav-arrow" />}
+                </button>
+              ))}
+            </div>
+          </div>
+        </nav>
+
+        {/* 用户区域 */}
+        <div className="sidebar-footer">
+          <div className="user-menu">
+            <button
+              onClick={() => handleNavigate('/settings')}
+              className={`nav-item ${location.pathname === '/settings' ? 'nav-item-active' : ''}`}
             >
-              <Space className="user-info">
-                <Avatar icon={<UserOutlined />} />
-                <span className="username">{user?.username || '用户'}</span>
-              </Space>
-            </Dropdown>
+              <Settings size={20} className="nav-icon" />
+              <span className={`nav-text ${sidebarOpen ? 'block' : 'hidden'}`}>
+                设置
+              </span>
+            </button>
           </div>
-        </Header>
-        
-        <Content className="app-content">
+
+          {sidebarOpen && (
+            <div className="user-info">
+              <div className="user-avatar">
+                <User size={18} />
+              </div>
+              <div className="user-details">
+                <p className="user-name">{user?.username || '用户'}</p>
+                <p className="user-role">管理员</p>
+              </div>
+              <button
+                onClick={handleLogout}
+                className="logout-btn"
+                title="退出登录"
+              >
+                <LogOut size={16} />
+              </button>
+            </div>
+          )}
+        </div>
+      </aside>
+
+      {/* 主内容区域 */}
+      <div className="main-content">
+        {/* 顶部导航栏 */}
+        <header className="top-header">
+          <div className="header-left">
+            {/* 移动端菜单按钮 */}
+            <button
+              onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+              className="mobile-menu-btn"
+            >
+              {mobileMenuOpen ? <X size={24} /> : <Menu size={24} />}
+            </button>
+
+            {/* 页面标题 */}
+            <h2 className="page-title">
+              {navigation.find(item => item.current)?.name || 'CV Studio'}
+            </h2>
+          </div>
+
+          <div className="header-right">
+            {/* 系统状态指示器 */}
+            <div className="status-indicator">
+              <div className="status-dot status-online"></div>
+              <span className="status-text">系统正常</span>
+            </div>
+
+            {/* GPU状态 */}
+            <div className="gpu-status">
+              <div className="gpu-indicator"></div>
+              <span className="gpu-text">GPU: 就绪</span>
+            </div>
+          </div>
+        </header>
+
+        {/* 内容区域 */}
+        <main className="content-area">
           <div className="content-wrapper">
-            <Outlet />
+            {children || <Outlet />}
           </div>
-        </Content>
-      </Layout>
-    </Layout>
+        </main>
+      </div>
+
+      {/* 移动端遮罩 */}
+      {mobileMenuOpen && (
+        <div
+          className="mobile-overlay"
+          onClick={() => setMobileMenuOpen(false)}
+        ></div>
+      )}
+    </div>
   )
 }
 
-export default LayoutComponent
+export default Layout

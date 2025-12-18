@@ -1,48 +1,92 @@
-import React from 'react'
-import { BrowserRouter as Router, Routes, Route } from 'react-router-dom'
+import React, { useEffect } from 'react'
+import { BrowserRouter as Router, Routes, Route, useLocation } from 'react-router-dom'
 import { Provider } from 'react-redux'
-import { ConfigProvider } from 'antd'
-import zhCN from 'antd/locale/zh_CN'
+import { ConfigProvider, theme } from 'antd'
 import { store } from './store'
-import Layout from '@components/Layout'
-import Login from '@pages/Login'
-import Dashboard from '@pages/Dashboard'
-import Datasets from '@pages/Datasets'
-import Models from '@pages/Models'
-import Training from '@pages/Training'
-import Inference from '@pages/Inference'
-import Settings from '@pages/Settings'
-import ProtectedRoute from '@components/Common/ProtectedRoute'
+import { getRouteConfig } from './router'
 import './App.css'
+
+/**
+ * 应用主题配置
+ * 配置Ant Design的深色主题
+ */
+const antdTheme = {
+  algorithm: theme.darkAlgorithm,
+  token: {
+    colorPrimary: '#3b82f6',
+    colorSuccess: '#10b981',
+    colorWarning: '#f59e0b',
+    colorError: '#ef4444',
+    colorInfo: '#6366f1',
+    borderRadius: 8,
+    wireframe: false
+  },
+  components: {
+    Layout: {
+      headerBg: 'transparent',
+      siderBg: 'transparent'
+    },
+    Menu: {
+      darkItemBg: 'transparent',
+      darkSubMenuItemBg: 'transparent'
+    }
+  }
+}
+
+/**
+ * 页面标题管理组件
+ */
+const PageTitleManager = () => {
+  const location = useLocation()
+
+  useEffect(() => {
+    // 根据路由设置页面标题
+    const routePath = location.pathname
+    let title = 'CV Studio'
+
+    // 简单的标题映射
+    const titleMap = {
+      '/login': '登录 - CV Studio',
+      '/dashboard': '仪表盘 - CV Studio',
+      '/datasets': '数据集管理 - CV Studio',
+      '/models': '模型构建 - CV Studio',
+      '/training': '训练管理 - CV Studio',
+      '/inference': '推理测试 - CV Studio',
+      '/settings': '设置 - CV Studio'
+    }
+
+    if (titleMap[routePath]) {
+      title = titleMap[routePath]
+    }
+
+    document.title = title
+  }, [location.pathname])
+
+  return null
+}
 
 /**
  * CV Studio 主应用组件
  * 包含路由配置和全局状态管理
  */
-function App() {
+const App = () => {
+  // 获取路由配置
+  const routeConfig = getRouteConfig()
+
   return (
     <Provider store={store}>
-      <ConfigProvider locale={zhCN}>
+      <ConfigProvider theme={antdTheme}>
         <Router>
+          <PageTitleManager />
           <div className="App">
             <Routes>
-              {/* 登录页面 */}
-              <Route path="/login" element={<Login />} />
-
-              {/* 受保护的路由 */}
-              <Route path="/" element={
-                <ProtectedRoute>
-                  <Layout />
-                </ProtectedRoute>
-              }>
-                <Route index element={<Dashboard />} />
-                <Route path="dashboard" element={<Dashboard />} />
-                <Route path="datasets" element={<Datasets />} />
-                <Route path="models" element={<Models />} />
-                <Route path="training" element={<Training />} />
-                <Route path="inference" element={<Inference />} />
-                <Route path="settings" element={<Settings />} />
-              </Route>
+              {routeConfig.map((route, index) => (
+                <Route
+                  key={index}
+                  path={route.path}
+                  element={route.element}
+                />
+              ))}
             </Routes>
           </div>
         </Router>
