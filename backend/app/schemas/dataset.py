@@ -258,7 +258,7 @@ class PaginationParams(BaseModel):
     page: int = Field(1, ge=1, description="页码")
     page_size: int = Field(20, ge=1, le=100, description="每页大小")
     sort_by: Optional[str] = Field("filename", description="排序字段")
-    sort_order: str = Field("asc", regex="^(asc|desc)$", description="排序顺序")
+    sort_order: str = Field("asc", pattern="^(asc|desc)$", description="排序顺序")
 
 
 class FilterParams(BaseModel):

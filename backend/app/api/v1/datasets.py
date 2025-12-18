@@ -491,7 +491,7 @@ async def get_dataset_images(
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(20, ge=1, le=100, description="每页大小"),
     sort_by: str = Query("filename", description="排序字段"),
-    sort_order: str = Query("asc", regex="^(asc|desc)$", description="排序顺序"),
+    sort_order: str = Query("asc", pattern="^(asc|desc)$", description="排序顺序"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
