@@ -3,12 +3,12 @@
  * 提供类型安全的Redux hooks
  */
 
-import { useDispatch, useSelector, TypedUseSelectorHook } from 'react-redux'
-import { RootState, AppDispatch } from './index'
+import { useDispatch, useSelector } from 'react-redux'
+// import { RootState, AppDispatch } from './index'
 
-// 类型化的hooks
-export const useAppDispatch = () => useDispatch<AppDispatch>()
-export const useAppSelector: TypedUseSelectorHook<RootState> = useSelector
+// 便捷的hooks（暂时移除类型注解，待后续升级到TypeScript）
+export const useAppDispatch = () => useDispatch()
+export const useAppSelector = useSelector
 
 // 便捷的selectors
 export const useAuth = () => useAppSelector(state => state.auth)

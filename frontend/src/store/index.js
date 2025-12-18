@@ -37,8 +37,8 @@ export const store = configureStore({
   devTools: process.env.NODE_ENV !== 'production',
 })
 
-// 类型导出，用于TypeScript支持
-export type RootState = ReturnType<typeof store.getState>
-export type AppDispatch = typeof store.dispatch
+// 类型导出，如果项目升级到TypeScript时使用
+// export type RootState = ReturnType<typeof store.getState>
+// export type AppDispatch = typeof store.dispatch
 
 export default store
