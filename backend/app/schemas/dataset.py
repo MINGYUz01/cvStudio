@@ -161,3 +161,109 @@ class DatasetMetadata(BaseModel):
     annotation_stats: Optional[AnnotationStats] = None
     quality_metrics: QualityMetrics
     format_specific_info: Dict[str, Any] = {}
+
+
+# 图像预览相关模式
+class ImageInfo(BaseModel):
+    """图像信息模式"""
+    path: str
+    filename: str
+    width: int
+    height: int
+    channels: int
+    format: str
+    size_bytes: int
+    annotations: List[Dict[str, Any]] = []
+
+
+class ImageListResponse(BaseModel):
+    """图像列表响应模式"""
+    images: List[ImageInfo]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+
+
+class ImageDetail(BaseModel):
+    """图像详情模式"""
+    image: ImageInfo
+    annotation_data: Dict[str, Any] = {}
+    thumbnail_url: Optional[str] = None
+    preview_url: Optional[str] = None
+
+
+# 数据增强相关模式
+class AugmentationConfig(BaseModel):
+    """数据增强配置模式"""
+    flip_horizontal: bool = False
+    flip_vertical: bool = False
+    rotation_angle: float = 0.0  # 旋转角度（度）
+    brightness_factor: float = 1.0  # 亮度因子
+    contrast_factor: float = 1.0  # 对比度因子
+    saturation_factor: float = 1.0  # 饱和度因子
+    crop_params: Optional[Dict[str, int]] = None  # 裁剪参数 {x, y, width, height}
+    scale_factor: float = 1.0  # 缩放因子
+    hue_shift: float = 0.0  # 色调偏移
+    gaussian_blur: float = 0.0  # 高斯模糊
+    noise_std: float = 0.0  # 噪声标准差
+
+
+class AugmentedImage(BaseModel):
+    """增强后的图像模式"""
+    original_path: str
+    augmented_data: str  # base64编码的图像数据
+    augmentation_config: AugmentationConfig
+    applied_operations: List[str] = []
+
+
+class AugmentationPreview(BaseModel):
+    """数据增强预览模式"""
+    original_image: str  # base64编码
+    augmented_images: List[AugmentedImage]
+    augmentation_summary: Dict[str, Any]
+
+
+# 数据统计分析相关模式
+class DetailedDatasetStatistics(BaseModel):
+    """详细数据集统计模式"""
+    basic_stats: DatasetStatistics
+    image_quality_analysis: Dict[str, Any]
+    annotation_quality_analysis: Optional[Dict[str, Any]] = None
+    class_balance_analysis: Dict[str, Any]
+    size_distribution_analysis: Dict[str, Any]
+    recommendations: List[str] = []
+
+
+class ClassDistribution(BaseModel):
+    """类别分布模式"""
+    class_name: str
+    count: int
+    percentage: float
+    average_confidence: float = 0.0
+    sample_images: List[str] = []
+
+
+class SizeDistribution(BaseModel):
+    """尺寸分布模式"""
+    size_range: str
+    count: int
+    percentage: float
+    sample_resolutions: List[str] = []
+
+
+# 分页浏览相关模式
+class PaginationParams(BaseModel):
+    """分页参数模式"""
+    page: int = Field(1, ge=1, description="页码")
+    page_size: int = Field(20, ge=1, le=100, description="每页大小")
+    sort_by: Optional[str] = Field("filename", description="排序字段")
+    sort_order: str = Field("asc", regex="^(asc|desc)$", description="排序顺序")
+
+
+class FilterParams(BaseModel):
+    """过滤参数模式"""
+    format_filter: Optional[str] = None
+    size_filter: Optional[str] = None
+    class_filter: Optional[List[str]] = None
+    annotation_filter: Optional[bool] = None
