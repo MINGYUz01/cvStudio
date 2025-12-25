@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { 
-  Play, 
-  Pause, 
-  Square, 
-  RefreshCw, 
-  Save, 
+import {
+  Play,
+  Pause,
+  Square,
+  RefreshCw,
+  Save,
   ChevronDown,
   Clock,
   Plus,
@@ -45,6 +45,7 @@ import {
   AreaChart,
   Area
 } from 'recharts';
+import { useTrainingLogsWS, LogEntry, MetricsEntry } from '../hooks/useWebSocket';
 
 // --- Types & Mock Data ---
 
@@ -325,7 +326,12 @@ const TrainingMonitor: React.FC = () => {
 
   const [dummyLogs, setDummyLogs] = useState<string[]>([]);
   const [notification, setNotification] = useState<{msg: string, type: 'error' | 'success' | 'info'} | null>(null);
-  
+
+  // WebSocket实时数据状态
+  const [realTimeLogs, setRealTimeLogs] = useState<LogEntry[]>([]);
+  const [realTimeMetrics, setRealTimeMetrics] = useState<MetricsEntry[]>([]);
+  const [wsConnected, setWsConnected] = useState(false);
+
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   // Initialize Config Defaults
@@ -370,6 +376,73 @@ const TrainingMonitor: React.FC = () => {
       setNotification({ msg, type });
       setTimeout(() => setNotification(null), 3000);
   };
+
+  // WebSocket连接：当查看特定实验详情时连接
+  const shouldConnectWS = view === 'detail' && selectedExpId !== null;
+  const { connected, disconnect } = useTrainingLogsWS(
+    shouldConnectWS ? selectedExpId! : '',
+    {
+      onLog: (data: LogEntry) => {
+        // 接收实时日志
+        setRealTimeLogs(prev => {
+          const newLogs = [...prev, data];
+          // 只保留最新100条日志
+          return newLogs.slice(-100);
+        });
+
+        // 同时添加到dummyLogs以在模态框中显示
+        const logMessage = `[${data.level}] ${data.message}`;
+        setDummyLogs(prev => [...prev.slice(-100), logMessage]);
+      },
+      onMetrics: (data: MetricsEntry) => {
+        // 接收实时指标
+        setRealTimeMetrics(prev => {
+          const newMetrics = [...prev, data];
+          // 只保留最新100条指标
+          return newMetrics.slice(-100);
+        });
+
+        // 更新实验列表中的对应实验状态
+        setExperiments(prev => prev.map(exp => {
+          if (exp.id === selectedExpId) {
+            // 更新准确率等显示数据
+            return {
+              ...exp,
+              accuracy: data.val_acc ? `${(data.val_acc * 100).toFixed(1)}%` : exp.accuracy
+            };
+          }
+          return exp;
+        }));
+      },
+      onStatusChange: (data) => {
+        // 接收状态变化
+        setExperiments(prev => prev.map(exp => {
+          if (exp.id === selectedExpId) {
+            return {
+              ...exp,
+              status: data.status as ExpStatus
+            };
+          }
+          return exp;
+        }));
+
+        showNotification(`训练状态已更新: ${data.status}`, 'info');
+      }
+    }
+  );
+
+  // 更新WebSocket连接状态
+  useEffect(() => {
+    setWsConnected(connected);
+  }, [connected]);
+
+  // 切换视图或实验时清空实时数据
+  useEffect(() => {
+    if (view !== 'detail' || !selectedExpId) {
+      setRealTimeLogs([]);
+      setRealTimeMetrics([]);
+    }
+  }, [view, selectedExpId]);
 
   const handleStartTraining = () => {
       if (!formName.trim()) {

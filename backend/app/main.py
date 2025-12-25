@@ -10,8 +10,10 @@ from contextlib import asynccontextmanager
 import uvicorn
 
 from app.core.config import settings
-from app.api.v1 import auth, datasets, models, training, inference, users
+from app.api.v1 import auth, datasets, models, training, inference, users, websocket, training_logs
 from app.core.exceptions import setup_exception_handlers
+from app.utils.metrics_collector import collector
+from app.api.websocket import manager
 
 
 @asynccontextmanager
@@ -21,11 +23,26 @@ async def lifespan(app: FastAPI):
     print(f"🚀 {settings.PROJECT_NAME} 正在启动...")
     print(f"📍 环境: {settings.ENVIRONMENT}")
     print(f"🌐 服务地址: http://{settings.HOST}:{settings.PORT}")
-    
+
+    # 启动系统指标收集器
+    async def metrics_callback(metrics):
+        """指标收集回调函数，将数据推送给订阅者"""
+        await manager.send_system_update({
+            "type": "system_stats",
+            "data": metrics
+        })
+
+    await collector.start_collection(callback=metrics_callback)
+    print("📊 系统指标收集器已启动")
+
     yield
-    
+
     # 关闭时执行
     print("👋 应用正在关闭...")
+
+    # 停止指标收集器
+    await collector.stop_collection()
+    print("📊 系统指标收集器已停止")
 
 
 def create_application() -> FastAPI:
@@ -95,7 +112,21 @@ def create_application() -> FastAPI:
         prefix=f"{settings.API_V1_STR}/inference",
         tags=["推理"]
     )
-    
+
+    # WebSocket路由
+    app.include_router(
+        websocket.router,
+        prefix=settings.API_V1_STR,
+        tags=["WebSocket"]
+    )
+
+    # 训练日志API
+    app.include_router(
+        training_logs.router,
+        prefix=f"{settings.API_V1_STR}/training",
+        tags=["训练日志"]
+    )
+
     return app
 
 
