@@ -1,0 +1,68 @@
+{#- 基础PyTorch模型类模板 -#}
+"""
+{{ model_name }} - 自动生成的PyTorch模型
+
+生成时间: {{ generation_time }}
+模型架构: {{ description | default('自动生成的模型') }}
+"""
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+
+class {{ model_name }}(nn.Module):
+    """
+    {{ model_name }} 模型
+
+    {% if docstring %}
+    {{ docstring | indent(4) }}
+    {% endif %}
+
+    架构信息:
+    - 层数量: {{ layer_count }}
+    - 参数数量: {{ num_parameters | default('待计算') }}
+    - 输入形状: {{ input_shape | default('[B, C, H, W]') }}
+    - 输出形状: {{ output_shape | default('[B, num_classes]') }}
+    """
+
+    def __init__(self):
+        """
+        初始化模型
+
+        定义所有层结构
+        """
+        super({{ model_name }}, self).__init__()
+
+        {% for layer_def in layer_defs %}
+        # {{ layer_def.description | default(layer_def.layer_type) }}
+        self.{{ layer_def.name }} = {{ layer_def.code }}
+        {% endfor %}
+
+    def forward(self, x):
+        """
+        前向传播
+
+        Args:
+            x: 输入张量，形状: {{ input_shape | default('[B, C, H, W]') }}
+
+        Returns:
+            输出张量，形状: {{ output_shape | default('[B, num_classes]') }}
+        """
+        {% for operation in operations %}
+        # {{ operation.comment | default(operation.node_type) }}
+        {{ operation.code }}
+        {% endfor %}
+
+        return x
+
+
+# 模型元数据
+MODEL_INFO = {
+    "name": "{{ model_name }}",
+    "layer_count": {{ layer_count }},
+    "num_parameters": {{ num_parameters | default(0) }},
+    "input_shape": {{ input_shape | default('null') }},
+    "output_shape": {{ output_shape | default('null') }},
+    "generation_time": "{{ generation_time }}",
+}

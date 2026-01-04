@@ -1,0 +1,373 @@
+"""
+PyTorch代码生成引擎
+
+本模块负责协调整个PyTorch代码生成流程：
+1. 调用LayerBuilder构建层代码
+2. 生成导入语句
+3. 组装完整的模型类代码
+4. 集成CodeValidator进行验证
+5. 生成元数据
+
+作者: CV Studio 开发团队
+日期: 2025-12-25
+"""
+
+from typing import Dict, List, Any
+from datetime import datetime
+
+from app.utils.graph_traversal import Graph
+from app.utils.shape_inference import NodeShapeInfo, TensorShape
+from .layer_builder import LayerBuilder
+from .validator import CodeValidator
+
+
+class CodeGenerator:
+    """
+    PyTorch代码生成引擎
+
+    职责：
+    1. 协调整体代码生成流程
+    2. 调用LayerBuilder构建层代码
+    3. 组装完整的模型类代码
+    4. 集成CodeValidator进行代码验证
+    5. 生成元数据
+    """
+
+    def __init__(self, template_dir: str = None):
+        """
+        初始化代码生成器
+
+        Args:
+            template_dir: 模板目录路径（暂时不使用，预留）
+        """
+        self.layer_builder = LayerBuilder()
+        self.validator = CodeValidator()
+
+    def generate(
+        self,
+        graph: Graph,
+        execution_order: dict,
+        shape_map: Dict[str, NodeShapeInfo],
+        model_name: str = "GeneratedModel"
+    ) -> Dict[str, Any]:
+        """
+        生成完整的PyTorch模型代码
+
+        Args:
+            graph: 计算图对象
+            execution_order: 执行顺序字典
+            shape_map: 节点形状映射
+            model_name: 模型类名
+
+        Returns:
+            {
+                "code": str,                    # 生成的完整代码
+                "model_class_name": str,        # 模型类名
+                "init_method": str,             # __init__方法代码
+                "forward_method": str,          # forward方法代码
+                "layer_count": int,             # 层数量
+                "validation": {...},            # 验证结果
+                "imports": List[str],           # 导入语句
+                "metadata": {...}               # 元数据
+            }
+        """
+        # 1. 构建__init__方法
+        init_result = self.layer_builder.build_init_method(
+            graph, execution_order, shape_map
+        )
+
+        # 2. 构建forward方法
+        forward_result = self.layer_builder.build_forward_method(
+            graph, execution_order, shape_map,
+            init_result["layer_names"]
+        )
+
+        # 3. 生成导入语句
+        imports = self._generate_imports(graph, execution_order)
+
+        # 4. 组装完整代码
+        full_code = self._assemble_full_code(
+            model_name=model_name,
+            imports=imports,
+            init_method=init_result["code"],
+            forward_method=forward_result["code"],
+            docstring=self._generate_docstring(
+                graph, execution_order, init_result["layer_defs"]
+            ),
+            layer_defs=init_result["layer_defs"],
+            operations=forward_result["operations"]
+        )
+
+        # 5. 验证生成的代码
+        validation = self.validator.validate_code(
+            full_code,
+            model_name,
+            init_result["layer_defs"],
+            forward_result["operations"]
+        )
+
+        # 6. 生成元数据
+        metadata = self._generate_metadata(
+            graph, execution_order, shape_map,
+            init_result["layer_defs"], validation
+        )
+
+        return {
+            "code": full_code,
+            "model_class_name": model_name,
+            "init_method": init_result["code"],
+            "forward_method": forward_result["code"],
+            "layer_count": len(execution_order["layers"]),
+            "validation": validation,
+            "imports": imports,
+            "metadata": metadata
+        }
+
+    def _generate_imports(
+        self,
+        graph: Graph,
+        execution_order: dict
+    ) -> List[str]:
+        """
+        生成导入语句
+
+        Args:
+            graph: 计算图对象
+            execution_order: 执行顺序字典
+
+        Returns:
+            导入语句列表
+        """
+        imports = [
+            "import torch",
+            "import torch.nn as nn",
+            "import torch.nn.functional as F",
+        ]
+
+        # 检查是否需要特殊导入
+        layers = execution_order["layers"]
+        for node_id in layers:
+            node = graph.nodes[node_id]
+
+            # 检查是否使用了特殊功能
+            if node.type == "Dropout":
+                # Dropout已经在nn中，不需要额外导入
+                pass
+
+        return imports
+
+    def _generate_docstring(
+        self,
+        graph: Graph,
+        execution_order: dict,
+        layer_defs: List[dict]
+    ) -> str:
+        """
+        生成模型文档字符串
+
+        Args:
+            graph: 计算图对象
+            execution_order: 执行顺序字典
+            layer_defs: 层定义列表
+
+        Returns:
+            文档字符串
+        """
+        lines = []
+        lines.append("模型结构:")
+
+        for layer_def in layer_defs:
+            desc = layer_def.description if hasattr(layer_def, 'description') else ""
+            if desc:
+                lines.append(f"  - {layer_def.name}: {desc}")
+            else:
+                lines.append(f"  - {layer_def.name}: {layer_def.layer_type}")
+
+        return "\n".join(lines)
+
+    def _assemble_full_code(
+        self,
+        model_name: str,
+        imports: List[str],
+        init_method: str,
+        forward_method: str,
+        docstring: str,
+        layer_defs: List[dict],
+        operations: List[dict]
+    ) -> str:
+        """
+        组装完整的模型类代码
+
+        Args:
+            model_name: 模型类名
+            imports: 导入语句列表
+            init_method: __init__方法代码
+            forward_method: forward方法代码
+            docstring: 文档字符串
+            layer_defs: 层定义列表
+            operations: 操作列表
+
+        Returns:
+            完整的代码字符串
+        """
+        lines = []
+
+        # 文件头注释
+        lines.append('"""')
+        lines.append(f"{model_name} - 自动生成的PyTorch模型")
+        lines.append("")
+        lines.append(f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        lines.append('"""')
+        lines.append("")
+
+        # 导入语句
+        for imp in imports:
+            lines.append(imp)
+        lines.append("")
+        lines.append("")
+
+        # 类定义
+        lines.append(f"class {model_name}(nn.Module):")
+        lines.append('    """')
+        lines.append(f'    {model_name} 模型')
+        lines.append("")
+        lines.append("    " + docstring.replace("\n", "\n    "))
+        lines.append("")
+        lines.append("    架构信息:")
+        lines.append(f"    - 层数量: {len(layer_defs)}")
+        lines.append(f"    - 参数数量: 待计算")
+        lines.append('    """')
+        lines.append("")
+
+        # __init__方法
+        lines.append(init_method)
+        lines.append("")
+
+        # forward方法
+        lines.append(forward_method)
+        lines.append("")
+
+        # 模型元数据
+        lines.append("# 模型元数据")
+        lines.append("MODEL_INFO = {")
+        lines.append(f'    "name": "{model_name}",')
+        lines.append(f'    "layer_count": {len(layer_defs)},')
+        lines.append(f'    "num_parameters": 0,  # 待计算')
+        generation_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        lines.append(f'    "generation_time": "{generation_time}",')
+        lines.append("}")
+
+        return "\n".join(lines)
+
+    def _generate_metadata(
+        self,
+        graph: Graph,
+        execution_order: dict,
+        shape_map: Dict[str, NodeShapeInfo],
+        layer_defs: List[dict],
+        validation: dict
+    ) -> Dict[str, Any]:
+        """
+        生成模型元数据
+
+        Args:
+            graph: 计算图对象
+            execution_order: 执行顺序字典
+            shape_map: 节点形状映射
+            layer_defs: 层定义列表
+            validation: 验证结果
+
+        Returns:
+            元数据字典
+        """
+        # 获取输入形状
+        input_nodes = execution_order["input_nodes"]
+        input_shape = None
+        if input_nodes and input_nodes[0] in shape_map:
+            input_shape_info = shape_map[input_nodes[0]].output_shape
+            input_shape = self._tensor_shape_to_list(input_shape_info)
+
+        # 获取输出形状
+        output_nodes = execution_order["output_nodes"]
+        output_shape = None
+        if output_nodes and output_nodes[0] in shape_map:
+            output_shape_info = shape_map[output_nodes[0]].output_shape
+            output_shape = self._tensor_shape_to_list(output_shape_info)
+
+        # 估算参数量
+        num_parameters = self._estimate_parameters(layer_defs)
+
+        return {
+            "layer_count": len(execution_order["layers"]),
+            "depth": execution_order["depth"],
+            "num_parameters": num_parameters,
+            "input_shape": input_shape,
+            "output_shape": output_shape,
+            "validation_passed": validation["valid"],
+            "forward_pass_success": validation.get("forward_pass_success", False)
+        }
+
+    def _tensor_shape_to_list(self, shape: TensorShape) -> List[Any]:
+        """
+        将TensorShape转换为列表格式
+
+        Args:
+            shape: TensorShape对象
+
+        Returns:
+            形状列表，例如 ["B", 3, 224, 224]
+        """
+        if shape.features:
+            # 1D张量
+            return ["B", shape.features]
+        else:
+            # 2D/3D/4D张量
+            return ["B", shape.channels, shape.height, shape.width]
+
+    def _estimate_parameters(self, layer_defs: List[dict]) -> int:
+        """
+        估算模型参数量
+
+        这是一个粗略估计，仅用于显示目的
+
+        Args:
+            layer_defs: 层定义列表
+
+        Returns:
+            参数总数估计值
+        """
+        total_params = 0
+
+        for layer_def in layer_defs:
+            # 支持LayerDefinition对象或字典
+            if hasattr(layer_def, 'layer_type'):
+                layer_type = layer_def.layer_type
+                params = layer_def.params if hasattr(layer_def, 'params') else {}
+            else:
+                layer_type = layer_def["layer_type"]
+                params = layer_def["params"]
+
+            if layer_type == "Conv2d":
+                # Conv2d: kernel_size * kernel_size * in_channels * out_channels + out_channels
+                in_channels = params.get("in_channels", 0)
+                out_channels = params.get("out_channels", 0)
+                kernel_size = params.get("kernel_size", 3)
+                conv_params = kernel_size * kernel_size * in_channels * out_channels + out_channels
+                total_params += conv_params
+
+            elif layer_type == "Linear":
+                # Linear: in_features * out_features + out_features
+                in_features = params.get("in_features", 0)
+                out_features = params.get("out_features", 0)
+                linear_params = in_features * out_features + out_features
+                total_params += linear_params
+
+            elif layer_type == "BatchNorm2d":
+                # BatchNorm2d: 2 * num_features (scale + bias)
+                num_features = params.get("num_features", 0)
+                bn_params = 2 * num_features
+                total_params += bn_params
+
+            # 其他层的参数量可以忽略或粗略估计
+
+        return total_params
