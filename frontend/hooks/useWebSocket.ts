@@ -4,7 +4,6 @@
  */
 
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { message } from 'antd';
 
 // WebSocket消息类型定义
 export type WSMessage =
@@ -159,7 +158,7 @@ export const useWebSocket = (
         setError(null);
         reconnectAttemptsRef.current = 0;
 
-        message.success('WebSocket连接已建立', 2);
+        console.log('✅ WebSocket连接已建立');
       };
 
       socket.onmessage = (event) => {
@@ -219,7 +218,7 @@ export const useWebSocket = (
             connect();
           }, reconnectInterval);
         } else if (reconnectAttemptsRef.current >= maxReconnectAttempts) {
-          message.error('WebSocket重连失败，已达到最大重连次数', 5);
+          console.error('❌ WebSocket重连失败，已达到最大重连次数');
           setError(new Error('达到最大重连次数'));
         }
       };
