@@ -160,7 +160,7 @@ class ClassificationResult(BaseModel):
 
     label: str = Field(..., description="类别标签")
     confidence: float = Field(..., description="置信度", ge=0.0, le=1.0)
-    class probabilities: Optional[Dict[str, float]] = Field(None, description="各类别概率")
+    probabilities: Optional[Dict[str, float]] = Field(None, description="各类别概率")
 
     class Config:
         json_schema_extra = {

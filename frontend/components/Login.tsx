@@ -1,12 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
 import {
   Hexagon, ArrowRight, Lock, Mail, Loader2, AlertCircle,
   Cpu, Database, Activity, Network, Server, Code, Terminal,
   Zap, Shield, Globe, Smartphone, Cloud, Search, Command,
   Layers, GitBranch, Box, HardDrive, Key
 } from 'lucide-react';
-import { useAuth } from '../hooks/useAuth';
+import { useAuth } from '../src/hooks/useAuth';
 
 interface LoginProps {
   onLogin?: () => void;
@@ -40,12 +39,7 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
   const [mounted, setMounted] = useState(false);
 
   const { login } = useAuth();
-  const navigate = useNavigate();
-  const location = useLocation();
 
-  // 获取登录后要跳转的路径
-  const from = (location.state as any)?.from || '/dashboard';
-  
   // For "Icon Galaxy" background
   const [backgroundIcons, setBackgroundIcons] = useState<FloatingIconData[]>([]);
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
@@ -107,13 +101,10 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
       // 使用真实的API登录
       await login({ username, password });
 
-      // 登录成功，调用回调并跳转
+      // 登录成功，调用回调
       if (onLogin) {
         onLogin();
       }
-
-      // 跳转到之前的页面或默认页面
-      navigate(from, { replace: true });
     } catch (err) {
       const message = err instanceof Error ? err.message : '登录失败，请检查用户名和密码';
       setError(message);

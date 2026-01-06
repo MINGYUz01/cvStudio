@@ -18,7 +18,7 @@ from app.schemas.dataset import (
     AugmentationPreview, DetailedDatasetStatistics, PaginationParams,
     FilterParams, AugmentedImage
 )
-from app.utils.responses import APIResponse, PaginatedResponse
+from app.utils.responses import APIResponse, PaginatedResponse, paginated_response
 from app.dependencies import get_current_user
 from app.models.user import User
 
@@ -110,13 +110,12 @@ async def get_datasets(
             query = query.filter(Dataset.format == format_filter)
         total = query.count()
 
-        return PaginatedResponse(
-            success=True,
+        return paginated_response(
             message="获取数据集列表成功",
             data=datasets,
-            total=total,
             page=skip // limit + 1,
-            page_size=limit
+            page_size=limit,
+            total=total
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取数据集列表失败: {str(e)}")

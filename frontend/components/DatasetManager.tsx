@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { 
-  Folder, 
-  Search, 
+import {
+  Folder,
+  Search,
   Layout,
   X,
   Eye,
@@ -9,17 +9,13 @@ import {
   HardDrive,
   Upload,
   ChevronDown,
-  Plus
+  Plus,
+  RefreshCw,
+  AlertCircle
 } from 'lucide-react';
 import { DatasetItem } from '../types';
-
-const datasets: DatasetItem[] = [
-  { id: '1', name: 'Urban_Traffic_V2', type: 'YOLO', count: 12450, size: '4.2 GB', lastModified: '2小时前' },
-  { id: '2', name: 'Medical_MRI_Brain', type: 'COCO', count: 850, size: '1.8 GB', lastModified: '1天前' },
-  { id: '3', name: 'Defect_Detection_PCB', type: 'VOC', count: 3200, size: '850 MB', lastModified: '3天前' },
-  { id: '4', name: 'Satellite_Forest_Seg', type: 'Folder', count: 5600, size: '12.1 GB', lastModified: '1周前' },
-  { id: '5', name: 'Face_Mask_Raw', type: 'YOLO', count: 1500, size: '600 MB', lastModified: '2周前' },
-];
+import { useDataset } from '../src/hooks/useDataset';
+import { adaptDatasetList } from '../src/services/datasetAdapter';
 
 // --- Modern Lightbox Component ---
 const Lightbox: React.FC<{ src: string, onClose: () => void }> = ({ src, onClose }) => {
@@ -89,9 +85,22 @@ const Lightbox: React.FC<{ src: string, onClose: () => void }> = ({ src, onClose
 };
 
 const DatasetManager: React.FC = () => {
-  const [selectedDsId, setSelectedDsId] = useState<string>(datasets[0].id);
+  // 使用数据集Hook获取真实数据
+  const { datasets: apiDatasets, loading, error, fetchDatasets } = useDataset();
+
+  // 使用适配器转换API数据为组件格式
+  const datasets: DatasetItem[] = adaptDatasetList(apiDatasets);
+
+  const [selectedDsId, setSelectedDsId] = useState<string>('');
   const [lightboxImg, setLightboxImg] = useState<string | null>(null);
-  
+
+  // 当数据集列表加载完成后，设置默认选中项
+  useEffect(() => {
+    if (datasets.length > 0 && !selectedDsId) {
+      setSelectedDsId(datasets[0].id);
+    }
+  }, [datasets, selectedDsId]);
+
   // Pagination State for Samples
   const [visibleSamples, setVisibleSamples] = useState(24);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
@@ -110,6 +119,44 @@ const DatasetManager: React.FC = () => {
     }, 500);
   };
 
+  // 加载状态
+  if (loading && datasets.length === 0) {
+    return (
+      <div className="h-full flex flex-col items-center justify-center p-6 space-y-6">
+        <div className="w-12 h-12 rounded-full border-4 border-cyan-500 border-t-transparent animate-spin"></div>
+        <p className="text-slate-400 text-sm">正在加载数据集...</p>
+      </div>
+    );
+  }
+
+  // 错误状态
+  if (error) {
+    return (
+      <div className="h-full flex flex-col items-center justify-center p-6 space-y-6">
+        <AlertCircle size={48} className="text-red-500" />
+        <p className="text-red-400 text-sm">{error}</p>
+        <button
+          onClick={fetchDatasets}
+          className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg text-sm flex items-center"
+        >
+          <RefreshCw size={16} className="mr-2" />
+          重试
+        </button>
+      </div>
+    );
+  }
+
+  // 空状态
+  if (datasets.length === 0) {
+    return (
+      <div className="h-full flex flex-col items-center justify-center p-6 space-y-6">
+        <Folder size={48} className="text-slate-600" />
+        <p className="text-slate-400 text-sm">暂无数据集</p>
+        <p className="text-slate-500 text-xs">点击下方"导入数据集"按钮添加您的第一个数据集</p>
+      </div>
+    );
+  }
+
   return (
     <div className="h-full flex flex-col p-6 space-y-6">
       <div className="flex justify-between items-center">
@@ -117,9 +164,20 @@ const DatasetManager: React.FC = () => {
            <h2 className="text-2xl font-bold text-white">数据集管理</h2>
            <p className="text-slate-400 text-sm">查看原始数据分布与元信息。</p>
          </div>
-         <button className="flex items-center px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-white font-bold rounded-xl shadow-lg shadow-cyan-900/20 transition-all">
-            <Upload size={18} className="mr-2" /> 导入数据
-         </button>
+         <div className="flex gap-2">
+           <button
+             onClick={fetchDatasets}
+             disabled={loading}
+             className="flex items-center px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white font-bold rounded-xl border border-slate-700 transition-all disabled:opacity-50"
+             title="刷新列表"
+           >
+              <RefreshCw size={18} className={`mr-2 ${loading ? 'animate-spin' : ''}`} />
+              刷新
+           </button>
+           <button className="flex items-center px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-white font-bold rounded-xl shadow-lg shadow-cyan-900/20 transition-all">
+              <Upload size={18} className="mr-2" /> 导入数据
+           </button>
+         </div>
       </div>
 
       <div className="flex-1 flex gap-6 min-h-0">

@@ -148,9 +148,8 @@ class TrainingSaveRequest(BaseModel):
     """保存到权重库请求"""
 
     weights_dir: str = Field(
-        ...,
-        description="权重库目录路径",
-        default="data/weights"
+        default="data/weights",
+        description="权重库目录路径"
     )
 
     class Config:
