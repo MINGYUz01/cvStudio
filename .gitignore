@@ -53,3 +53,9 @@ temp/
 # cache
 .cache/
 __pycache__/
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+backend/cvstudio.db
