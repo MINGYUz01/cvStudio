@@ -31,7 +31,8 @@ import {
   AlertTriangle,
   Edit3,
   Trash2,
-  HardDrive
+  HardDrive,
+  AlertCircle
 } from 'lucide-react';
 import {
   LineChart,
@@ -45,6 +46,7 @@ import {
   AreaChart,
   Area
 } from 'recharts';
+import { useTraining } from '../src/hooks/useTraining';
 import { useTrainingLogsWS, LogEntry, MetricsEntry } from '../hooks/useWebSocket';
 
 // --- Types & Mock Data ---
@@ -65,20 +67,6 @@ interface Experiment {
   startedAt: string;
   config?: any;
 }
-
-const INITIAL_EXPERIMENTS: Experiment[] = [
-  { id: '1042', name: 'YOLOv8-Nano-Base', task: 'detection', model: 'YOLOv8-N', dataset: 'Urban_Traffic', augmentation: 'YOLO Default', status: 'running', duration: '45m', accuracy: '0.65 mAP', startedAt: '10:30 AM' },
-  { id: '1041', name: 'ResNet50-FineTune', task: 'classification', model: 'ResNet50', dataset: 'Medical_MRI', augmentation: 'Medical Robust', status: 'completed', duration: '4h 12m', accuracy: '94.2%', startedAt: 'Yesterday' },
-  { id: '1040', name: 'UNet-Cell-Seg', task: 'segmentation', model: 'UNet', dataset: 'Cell_Microscopy', augmentation: 'No Augmentation', status: 'failed', duration: '12m', accuracy: '-', startedAt: 'Yesterday' },
-  { id: '1039', name: 'YOLO-L-Heavy', task: 'detection', model: 'YOLOv8-L', dataset: 'Defect_PCB', augmentation: 'YOLO Default', status: 'completed', duration: '12h 05m', accuracy: '0.91 mAP', startedAt: '2 days ago' },
-];
-
-const TRAINING_CHART_DATA = Array.from({ length: 50 }, (_, i) => ({
-  epoch: i,
-  trainLoss: Math.max(0.1, 2.5 * Math.exp(-0.05 * i) + Math.random() * 0.1),
-  valLoss: Math.max(0.2, 2.8 * Math.exp(-0.045 * i) + Math.random() * 0.2),
-  metric: Math.min(0.95, 0.1 + 0.8 * (1 - Math.exp(-0.06 * i)) + Math.random() * 0.05)
-}));
 
 // --- Configuration Schema ---
 

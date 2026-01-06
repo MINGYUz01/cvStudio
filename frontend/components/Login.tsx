@@ -1,13 +1,14 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { 
+import {
   Hexagon, ArrowRight, Lock, Mail, Loader2, AlertCircle,
-  Cpu, Database, Activity, Network, Server, Code, Terminal, 
+  Cpu, Database, Activity, Network, Server, Code, Terminal,
   Zap, Shield, Globe, Smartphone, Cloud, Search, Command,
   Layers, GitBranch, Box, HardDrive, Key
 } from 'lucide-react';
+import { useAuth } from '../src/hooks/useAuth';
 
 interface LoginProps {
-  onLogin: () => void;
+  onLogin?: () => void;
 }
 
 // The "Stars" of our Digital Universe
@@ -31,12 +32,14 @@ interface FloatingIconData {
 }
 
 const Login: React.FC<LoginProps> = ({ onLogin }) => {
-  const [email, setEmail] = useState('admin@neurocore.ai');
-  const [password, setPassword] = useState('password');
+  const [username, setUsername] = useState('admin');
+  const [password, setPassword] = useState('admin123');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
   const [mounted, setMounted] = useState(false);
-  
+
+  const { login } = useAuth();
+
   // For "Icon Galaxy" background
   const [backgroundIcons, setBackgroundIcons] = useState<FloatingIconData[]>([]);
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
@@ -89,21 +92,25 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
     });
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     setIsLoading(true);
 
-    // Mock authentication delay
-    setTimeout(() => {
-      if (email && password) {
-        setIsLoading(false);
+    try {
+      // 使用真实的API登录
+      await login({ username, password });
+
+      // 登录成功，调用回调
+      if (onLogin) {
         onLogin();
-      } else {
-        setIsLoading(false);
-        setError('请输入有效的账号和密码');
       }
-    }, 1500);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : '登录失败，请检查用户名和密码';
+      setError(message);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (
@@ -204,7 +211,7 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
                />
                
                <form onSubmit={handleSubmit} className="space-y-6 relative z-10">
-                  
+
                   <div className="space-y-2">
                      <label className="text-xs font-bold text-slate-300 uppercase ml-1 flex items-center">
                         <Terminal size={12} className="mr-1.5 text-cyan-400" /> Account ID
@@ -212,12 +219,12 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
                      <div className="relative group/input">
                         <div className="absolute inset-0 bg-cyan-500/5 rounded-xl opacity-0 group-hover/input:opacity-100 transition-opacity pointer-events-none"></div>
                         <Mail className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 group-focus-within/input:text-cyan-400 transition-colors" size={18} />
-                        <input 
-                          type="email" 
-                          value={email}
-                          onChange={(e) => setEmail(e.target.value)}
+                        <input
+                          type="text"
+                          value={username}
+                          onChange={(e) => setUsername(e.target.value)}
                           className="w-full bg-slate-950/60 border border-slate-700 rounded-xl py-3 pl-10 pr-4 text-white placeholder-slate-600 outline-none focus:border-cyan-500 focus:bg-slate-900/80 transition-all font-mono text-sm"
-                          placeholder="Enter identity..."
+                          placeholder="Enter username..."
                         />
                      </div>
                   </div>
