@@ -68,3 +68,9 @@ backend/cvstudio.db
 # Temporary files
 nul
 *.tmp
+
+# Generated datasets and models (testing data)
+data/
+models/
+checkpoints/
+outputs/

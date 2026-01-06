@@ -16,6 +16,7 @@ import {
 import { DatasetItem } from '../types';
 import { useDataset } from '../src/hooks/useDataset';
 import { adaptDatasetList } from '../src/services/datasetAdapter';
+import { datasetService } from '../src/services/datasets';
 
 // --- Modern Lightbox Component ---
 const Lightbox: React.FC<{ src: string, onClose: () => void }> = ({ src, onClose }) => {
@@ -94,6 +95,15 @@ const DatasetManager: React.FC = () => {
   const [selectedDsId, setSelectedDsId] = useState<string>('');
   const [lightboxImg, setLightboxImg] = useState<string | null>(null);
 
+  // 图片列表状态
+  const [images, setImages] = useState<Array<{path: string; name: string; size: number}>>([]);
+  const [totalImages, setTotalImages] = useState(0);
+  const [isLoadingImages, setIsLoadingImages] = useState(false);
+
+  // Pagination State for Samples
+  const [visibleSamples, setVisibleSamples] = useState(24);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+
   // 当数据集列表加载完成后，设置默认选中项
   useEffect(() => {
     if (datasets.length > 0 && !selectedDsId) {
@@ -101,9 +111,27 @@ const DatasetManager: React.FC = () => {
     }
   }, [datasets, selectedDsId]);
 
-  // Pagination State for Samples
-  const [visibleSamples, setVisibleSamples] = useState(24);
-  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  // 当选择的数据集改变时，加载真实图片
+  useEffect(() => {
+    const loadDatasetImages = async () => {
+      if (!selectedDsId) return;
+
+      setIsLoadingImages(true);
+      try {
+        const dsId = parseInt(selectedDsId);
+        const data = await datasetService.getDatasetImages(dsId, 0, visibleSamples);
+        setImages(data.images);
+        setTotalImages(data.total);
+      } catch (err) {
+        console.error('Failed to load images:', err);
+        setImages([]);
+      } finally {
+        setIsLoadingImages(false);
+      }
+    };
+
+    loadDatasetImages();
+  }, [selectedDsId, visibleSamples]);
 
   // Reset pagination when dataset changes
   useEffect(() => {
@@ -146,13 +174,50 @@ const DatasetManager: React.FC = () => {
     );
   }
 
-  // 空状态
+  // 空状态 - 显示导入按钮
   if (datasets.length === 0) {
     return (
-      <div className="h-full flex flex-col items-center justify-center p-6 space-y-6">
-        <Folder size={48} className="text-slate-600" />
-        <p className="text-slate-400 text-sm">暂无数据集</p>
-        <p className="text-slate-500 text-xs">点击下方"导入数据集"按钮添加您的第一个数据集</p>
+      <div className="h-full flex flex-col p-6 space-y-6">
+        {/* 顶部标题栏 */}
+        <div className="flex justify-between items-center">
+          <div>
+            <h2 className="text-2xl font-bold text-white">数据集管理</h2>
+            <p className="text-slate-400 text-sm">查看原始数据分布与元信息。</p>
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={fetchDatasets}
+              disabled={loading}
+              className="flex items-center px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white font-bold rounded-xl border border-slate-700 transition-all disabled:opacity-50"
+              title="刷新列表"
+            >
+              <RefreshCw size={18} className={`mr-2 ${loading ? 'animate-spin' : ''}`} />
+              刷新
+            </button>
+            <button className="flex items-center px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-white font-bold rounded-xl shadow-lg shadow-cyan-900/20 transition-all">
+              <Upload size={18} className="mr-2" /> 导入数据集
+            </button>
+          </div>
+        </div>
+
+        {/* 空状态提示 + 导入卡片 */}
+        <div className="flex-1 flex items-center justify-center">
+          <div className="flex flex-col items-center space-y-6">
+            <Folder size={64} className="text-slate-600" />
+            <div className="text-center space-y-2">
+              <p className="text-slate-400 text-base">暂无数据集</p>
+              <p className="text-slate-500 text-sm">点击右侧按钮添加您的第一个数据集</p>
+            </div>
+
+            {/* 导入卡片 */}
+            <div
+              className="w-64 p-8 rounded-xl border-2 border-dashed border-slate-700 hover:border-cyan-500 hover:bg-slate-900/60 cursor-pointer transition-all flex flex-col items-center justify-center text-slate-500 hover:text-cyan-400 group"
+            >
+              <Plus size={32} className="mb-3 group-hover:scale-110 transition-transform" />
+              <span className="text-sm font-medium">导入数据集</span>
+            </div>
+          </div>
+        </div>
       </div>
     );
   }
@@ -263,15 +328,36 @@ const DatasetManager: React.FC = () => {
                     <Eye size={16} className="mr-2" /> 样本概览
                   </h3>
                   <div className="grid grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-3 mb-6">
-                    {Array.from({length: visibleSamples}).map((_, i) => {
-                        const imgUrl = `https://picsum.photos/600/600?random=${i + parseInt(selectedDsId)}`;
+                    {isLoadingImages ? (
+                      <div className="col-span-full flex justify-center items-center py-12">
+                        <div className="w-8 h-8 rounded-full border-4 border-cyan-500 border-t-transparent animate-spin"></div>
+                        <p className="text-slate-400 text-sm ml-3">加载图片中...</p>
+                      </div>
+                    ) : images.length === 0 ? (
+                      <div className="col-span-full text-center py-12">
+                        <p className="text-slate-500 text-sm">该数据集暂无图片</p>
+                      </div>
+                    ) : (
+                      images.map((img, i) => {
+                        const dsId = parseInt(selectedDsId);
+                        const fullUrl = datasetService.getImagePreviewUrl(dsId, img.path);
                         return (
-                          <div key={i} onClick={() => setLightboxImg(imgUrl)} className="aspect-square bg-slate-800 rounded border border-slate-800 overflow-hidden relative group cursor-pointer hover:border-cyan-500 transition-all duration-200">
-                            <img src={imgUrl} className="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity" />
+                          <div key={i} onClick={() => setLightboxImg(fullUrl)} className="aspect-square bg-slate-800 rounded border border-slate-800 overflow-hidden relative group cursor-pointer hover:border-cyan-500 transition-all duration-200">
+                            <img
+                              src={fullUrl}
+                              alt={img.name}
+                              className="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity"
+                              loading="lazy"
+                              onError={(e) => {
+                                // 如果加载失败，显示占位图
+                                (e.target as HTMLImageElement).src = `https://via.placeholder.com/300?text=${encodeURIComponent(img.name)}`;
+                              }}
+                            />
                             <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors" />
                           </div>
                         )
-                    })}
+                      })
+                    )}
                   </div>
                   
                   {/* Load More Button */}

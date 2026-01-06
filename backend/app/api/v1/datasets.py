@@ -21,9 +21,11 @@ from app.schemas.dataset import (
 from app.utils.responses import APIResponse, PaginatedResponse, paginated_response
 from app.dependencies import get_current_user
 from app.models.user import User
+from app.utils.image_processor import ImageProcessor
 
 router = APIRouter()
 dataset_service = DatasetService()
+image_processor = ImageProcessor()
 
 
 @router.post("/upload", response_model=APIResponse[DatasetResponse])
@@ -200,6 +202,62 @@ async def delete_dataset(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"删除数据集失败: {str(e)}")
+
+
+@router.get("/{dataset_id}/images", response_model=APIResponse[List[dict]])
+async def get_dataset_images(
+    dataset_id: int,
+    skip: int = Query(0, ge=0, description="跳过的图片数"),
+    limit: int = Query(24, ge=1, le=100, description="返回的图片数"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    获取数据集的图片列表
+    """
+    try:
+        dataset = dataset_service.get_dataset(db, dataset_id)
+        if not dataset:
+            raise HTTPException(status_code=404, detail=f"数据集 {dataset_id} 不存在")
+
+        from pathlib import Path
+        import os
+
+        dataset_path = Path(dataset.path)
+        if not dataset_path.exists():
+            raise HTTPException(status_code=404, detail="数据集路径不存在")
+
+        # 查找所有图片文件
+        image_files = []
+        for ext in ['*.jpg', '*.jpeg', '*.png']:
+            for img_file in dataset_path.rglob(ext):
+                if img_file.is_file():
+                    # 获取相对路径
+                    rel_path = img_file.relative_to(dataset_path)
+                    image_files.append({
+                        "path": str(rel_path).replace("\\", "/"),
+                        "name": img_file.name,
+                        "size": img_file.stat().st_size
+                    })
+
+        # 分页
+        total = len(image_files)
+        images = image_files[skip:skip + limit]
+
+        return APIResponse(
+            success=True,
+            message="获取图片列表成功",
+            data={
+                "images": images,
+                "total": total,
+                "dataset_id": dataset_id,
+                "dataset_name": dataset.name
+            }
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"获取图片列表失败: {str(e)}")
 
 
 @router.post("/{dataset_id}/rescan", response_model=APIResponse[DatasetResponse])

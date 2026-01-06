@@ -245,6 +245,59 @@ class DatasetServiceClass {
   }
 
   /**
+   * 获取数据集图片列表
+   * @param id 数据集ID
+   * @param skip 跳过的数量
+   * @param limit 返回数量限制
+   * @returns 图片列表
+   */
+  async getDatasetImages(
+    id: number,
+    skip: number = 0,
+    limit: number = 24
+  ): Promise<{
+    images: Array<{
+      path: string;
+      name: string;
+      size: number;
+    }>;
+    total: number;
+    dataset_id: number;
+    dataset_name: string;
+  }> {
+    const response = await apiClient.get<{
+      success: boolean;
+      message: string;
+      data: {
+        images: Array<{
+          path: string;
+          name: string;
+          size: number;
+        }>;
+        total: number;
+        dataset_id: number;
+        dataset_name: string;
+      };
+    }>(
+      `${this.baseUrl}/${id}/images`,
+      { params: { skip, limit } }
+    );
+    return response.data;
+  }
+
+  /**
+   * 获取图片预览URL
+   * @param datasetId 数据集ID
+   * @param imagePath 图片相对路径
+   * @returns 预览URL（完整URL）
+   */
+  getImagePreviewUrl(datasetId: number, imagePath: string): string {
+    // 获取基础URL（移除 /api/v1 后缀）
+    const baseUrl = apiClient['baseURL']?.replace('/api/v1', '') || 'http://localhost:8001';
+    return `${baseUrl}/api/v1/datasets/${datasetId}/images/${imagePath}/preview`;
+  }
+
+  /**
    * 获取数据集统计信息
    * @param id 数据集ID
    * @returns 统计信息
