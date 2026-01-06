@@ -47,10 +47,32 @@ class UserResponse(UserBase):
 class Token(BaseModel):
     """访问令牌模式"""
     access_token: str
+    refresh_token: str
     token_type: str
     user: UserResponse
+
+
+class TokenRefresh(BaseModel):
+    """刷新令牌模式"""
+    refresh_token: str
 
 
 class TokenData(BaseModel):
     """令牌数据模式"""
     username: Optional[str] = None
+
+
+class UserConfig(BaseModel):
+    """用户配置模式"""
+    theme: Optional[str] = "dark"
+    language: Optional[str] = "zh-CN"
+    default_dataset_id: Optional[int] = None
+    default_model_id: Optional[int] = None
+    notifications_enabled: Optional[bool] = True
+    auto_save: Optional[bool] = True
+
+
+class UserPasswordChange(BaseModel):
+    """用户密码修改模式"""
+    old_password: str
+    new_password: str
