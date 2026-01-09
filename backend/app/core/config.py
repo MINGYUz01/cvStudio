@@ -43,7 +43,7 @@ class Settings(BaseSettings):
     MODELS_DIR: str = "../data/models"
     CHECKPOINTS_DIR: str = "../data/checkpoints"
     TEMP_DIR: str = "../data/temp"
-    MAX_UPLOAD_SIZE: int = 104857600  # 100MB
+    MAX_UPLOAD_SIZE: int = 1073741824  # 1GB
     
     # 训练配置
     DEFAULT_TRAINING_DEVICE: str = "cpu"
