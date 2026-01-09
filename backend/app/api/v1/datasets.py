@@ -84,7 +84,7 @@ async def register_dataset(
         raise HTTPException(status_code=500, detail=f"注册数据集失败: {str(e)}")
 
 
-@router.get("/", response_model=PaginatedResponse[DatasetResponse])
+@router.get("/")
 async def get_datasets(
     skip: int = Query(0, ge=0, description="跳过的记录数"),
     limit: int = Query(20, ge=1, le=100, description="返回的记录数"),
@@ -95,6 +95,8 @@ async def get_datasets(
     """
     获取数据集列表
     """
+    import sys
+    print(f"DEBUG: get_datasets called with skip={skip}, limit={limit}", file=sys.stderr)
     try:
         datasets = dataset_service.get_datasets(
             db=db,
@@ -110,14 +112,33 @@ async def get_datasets(
             query = query.filter(Dataset.format == format_filter)
         total = query.count()
 
-        return paginated_response(
-            message="获取数据集列表成功",
-            data=datasets,
-            page=skip // limit + 1,
-            page_size=limit,
-            total=total
-        )
+        # 将 SQLAlchemy 模型转换为 Pydantic schema
+        dataset_data = [DatasetResponse.model_validate(ds) for ds in datasets]
+
+        # 计算分页信息
+        total_pages = (total + limit - 1) // limit if total > 0 else 0
+        page = skip // limit + 1
+
+        # 直接返回标准格式的字典
+        result = {
+            "success": True,
+            "message": "获取数据集列表成功",
+            "data": [ds.model_dump() for ds in dataset_data],
+            "pagination": {
+                "page": page,
+                "page_size": limit,
+                "total": total,
+                "total_pages": total_pages,
+                "has_next": page < total_pages,
+                "has_prev": page > 1
+            }
+        }
+        print(f"DEBUG: Returning result with pagination: {result.get('pagination')}", file=sys.stderr)
+        return result
     except Exception as e:
+        print(f"DEBUG: Exception occurred: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=f"获取数据集列表失败: {str(e)}")
 
 
@@ -846,3 +867,63 @@ async def get_dataset_filter_options(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取过滤选项失败: {str(e)}")
+
+
+@router.get("/{dataset_id}/image-file")
+async def get_dataset_image_file(
+    dataset_id: int,
+    index: int = Query(..., ge=0, description="图像索引"),
+    db: Session = Depends(get_db)
+    # 移除认证要求，允许直接访问图片文件用于显示
+    # current_user: User = Depends(get_current_user)
+):
+    """
+    根据索引获取数据集中的图像文件
+    前端可以直接使用此端点显示图片
+    注意：此端点不要求认证，方便前端<img>标签直接加载
+    """
+    try:
+        dataset = dataset_service.get_dataset(db, dataset_id)
+        if not dataset:
+            raise HTTPException(status_code=404, detail=f"数据集 {dataset_id} 不存在")
+
+        # 从元数据中获取图像路径列表
+        image_paths = dataset.meta.get("image_paths", [])
+        if not image_paths:
+            raise HTTPException(status_code=404, detail="数据集没有图像路径信息")
+
+        if index >= len(image_paths):
+            raise HTTPException(status_code=404, detail=f"图像索引 {index} 超出范围")
+
+        image_path = image_paths[index]
+
+        # 验证图像路径是否在数据集路径内
+        from pathlib import Path
+        dataset_root = Path(dataset.path).resolve()
+        image_full_path = Path(image_path).resolve()
+
+        try:
+            image_full_path.relative_to(dataset_root)
+        except ValueError:
+            # 如果路径是相对路径，尝试相对于数据集根目录
+            image_full_path = (dataset_root / Path(image_path).name).resolve()
+            try:
+                image_full_path.relative_to(dataset_root)
+            except ValueError:
+                raise HTTPException(status_code=400, detail="图像路径不在数据集范围内")
+
+        # 检查文件是否存在
+        if not image_full_path.exists():
+            raise HTTPException(status_code=404, detail=f"图像文件不存在: {image_full_path}")
+
+        # 返回文件
+        from fastapi.responses import FileResponse
+        return FileResponse(
+            image_full_path,
+            media_type="image/jpeg",
+            headers={"Cache-Control": "max-age=3600"}
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"获取图像文件失败: {str(e)}")

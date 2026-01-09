@@ -327,27 +327,35 @@ class DatasetService:
             metadata.update({
                 "data_config": details.get("data_config", {}),
                 "label_stats": details.get("label_stats", {}),
-                "image_stats": details.get("image_stats", {})
+                "image_stats": details.get("image_stats", {}),
+                "image_paths": details.get("image_paths", [])  # 保存图像路径列表
             })
         elif best_format["format"] == "coco":
+            # COCO格式使用coco_data中的images列表
+            coco_data = details.get("coco_data", {})
             metadata.update({
-                "coco_data": details.get("coco_data", {}),
+                "coco_data": coco_data,
                 "validation": details.get("validation", {}),
-                "image_stats": details.get("image_stats", {})
+                "image_stats": details.get("image_stats", {}),
+                # 从COCO数据中提取图像路径
+                "image_paths": details.get("image_paths", [])
             })
         elif best_format["format"] == "voc":
             metadata.update({
                 "xml_stats": details.get("xml_stats", {}),
                 "structure": details.get("structure", {}),
                 "imagesets": details.get("imagesets", {}),
-                "image_stats": details.get("image_stats", {})
+                "image_stats": details.get("image_stats", {}),
+                "image_paths": details.get("image_files", [])  # 保存图像路径列表
             })
         elif best_format["format"] == "classification":
             metadata.update({
                 "class_directories": details.get("classes", {}),
                 "structure": details.get("structure", {}),
                 "size_distribution": details.get("size_distribution", {}),
-                "format_distribution": details.get("format_distribution", {})
+                "format_distribution": details.get("format_distribution", {}),
+                # 对于分类格式，从sample_images或class_directories中提取图像路径
+                "image_paths": details.get("sample_images", [])
             })
 
         return metadata

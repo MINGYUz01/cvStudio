@@ -25,15 +25,25 @@ export interface Dataset {
 }
 
 /**
+ * 分页信息
+ */
+export interface PaginationInfo {
+  page: number;
+  page_size: number;
+  total: number;
+  total_pages: number;
+  has_next: boolean;
+  has_prev: boolean;
+}
+
+/**
  * 数据集列表响应
  */
 export interface DatasetListResponse {
   success: boolean;
   message: string;
   data: Dataset[];
-  total: number;
-  page: number;
-  page_size: number;
+  pagination: PaginationInfo;
 }
 
 /**
@@ -310,6 +320,28 @@ class DatasetServiceClass {
   async deleteThumbnails(id: number): Promise<void> {
     await apiClient.delete<{ success: boolean; message: string }>(
       `${this.baseUrl}/${id}/thumbnails`
+    );
+  }
+
+  /**
+   * 获取数据集图像URL
+   * @param id 数据集ID
+   * @param index 图像索引
+   * @returns 图像URL
+   */
+  getImageUrl(id: number, index: number): string {
+    return `${this.baseUrl}/${id}/image-file?index=${index}`;
+  }
+
+  /**
+   * 获取数据集中所有图像的URL列表
+   * @param dataset 数据集对象
+   * @returns 图像URL列表
+   */
+  getImageUrls(dataset: Dataset): string[] {
+    const imagePaths = dataset.meta?.image_paths || [];
+    return imagePaths.map((_: string, index: number) =>
+      this.getImageUrl(dataset.id, index)
     );
   }
 }

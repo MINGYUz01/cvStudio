@@ -16,6 +16,8 @@ import {
 import { DatasetItem } from '../types';
 import { useDataset } from '../src/hooks/useDataset';
 import { adaptDatasetList } from '../src/services/datasetAdapter';
+import { datasetService } from '../src/services/datasets';
+import { apiClient } from '../src/services/api';
 
 // --- Modern Lightbox Component ---
 const Lightbox: React.FC<{ src: string, onClose: () => void }> = ({ src, onClose }) => {
@@ -93,6 +95,7 @@ const DatasetManager: React.FC = () => {
 
   const [selectedDsId, setSelectedDsId] = useState<string>('');
   const [lightboxImg, setLightboxImg] = useState<string | null>(null);
+  const [imageUrls, setImageUrls] = useState<string[]>([]);
 
   // 当数据集列表加载完成后，设置默认选中项
   useEffect(() => {
@@ -100,6 +103,21 @@ const DatasetManager: React.FC = () => {
       setSelectedDsId(datasets[0].id);
     }
   }, [datasets, selectedDsId]);
+
+  // 当选中的数据集改变时，获取图片URL列表
+  useEffect(() => {
+    if (selectedDsId && apiDatasets.length > 0) {
+      const selectedDataset = apiDatasets.find((ds: any) => ds.id === parseInt(selectedDsId));
+      if (selectedDataset) {
+        // 从元数据中获取图片路径，然后构建URL
+        const imagePaths = selectedDataset.meta?.image_paths || [];
+        const urls = imagePaths.map((_: string, index: number) =>
+          `${apiClient['baseURL']}/datasets/${selectedDataset.id}/image-file?index=${index}`
+        );
+        setImageUrls(urls);
+      }
+    }
+  }, [selectedDsId, apiDatasets]);
 
   // Pagination State for Samples
   const [visibleSamples, setVisibleSamples] = useState(24);
@@ -263,31 +281,47 @@ const DatasetManager: React.FC = () => {
                     <Eye size={16} className="mr-2" /> 样本概览
                   </h3>
                   <div className="grid grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-3 mb-6">
-                    {Array.from({length: visibleSamples}).map((_, i) => {
-                        const imgUrl = `https://picsum.photos/600/600?random=${i + parseInt(selectedDsId)}`;
-                        return (
-                          <div key={i} onClick={() => setLightboxImg(imgUrl)} className="aspect-square bg-slate-800 rounded border border-slate-800 overflow-hidden relative group cursor-pointer hover:border-cyan-500 transition-all duration-200">
-                            <img src={imgUrl} className="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity" />
-                            <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors" />
-                          </div>
-                        )
-                    })}
+                    {imageUrls.slice(0, visibleSamples).length > 0 ? (
+                      imageUrls.slice(0, visibleSamples).map((imgUrl, i) => (
+                        <div key={i} onClick={() => setLightboxImg(imgUrl)} className="aspect-square bg-slate-800 rounded border border-slate-800 overflow-hidden relative group cursor-pointer hover:border-cyan-500 transition-all duration-200">
+                          <img
+                            src={imgUrl}
+                            className="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity"
+                            onError={(e) => {
+                              // 如果图片加载失败，使用占位符
+                              (e.target as HTMLImageElement).src = `https://picsum.photos/600/600?random=${i}`;
+                            }}
+                            alt={`Sample ${i + 1}`}
+                          />
+                          <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors" />
+                        </div>
+                      ))
+                    ) : (
+                      // 如果没有图片，显示占位符
+                      Array.from({length: Math.min(visibleSamples, 24)}).map((_, i) => (
+                        <div key={i} className="aspect-square bg-slate-800 rounded border border-slate-800 overflow-hidden relative flex items-center justify-center">
+                          <span className="text-slate-600 text-xs">无图片</span>
+                        </div>
+                      ))
+                    )}
                   </div>
-                  
-                  {/* Load More Button */}
-                  <div className="flex justify-center">
-                    <button 
-                      onClick={handleLoadMore}
-                      disabled={isLoadingMore}
-                      className="px-6 py-2 bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-white rounded-full border border-slate-700 transition-all text-xs font-medium flex items-center disabled:opacity-50"
-                    >
-                      {isLoadingMore ? (
-                         <span className="flex items-center"><div className="w-3 h-3 rounded-full border-2 border-slate-500 border-t-transparent animate-spin mr-2"></div> Loading...</span>
-                      ) : (
-                         <span className="flex items-center"><ChevronDown size={14} className="mr-1" /> 加载更多 (Load More)</span>
-                      )}
-                    </button>
-                  </div>
+
+                  {/* Load More Button - 只在有更多图片时显示 */}
+                  {imageUrls.length > visibleSamples && (
+                    <div className="flex justify-center">
+                      <button
+                        onClick={handleLoadMore}
+                        disabled={isLoadingMore}
+                        className="px-6 py-2 bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-white rounded-full border border-slate-700 transition-all text-xs font-medium flex items-center disabled:opacity-50"
+                      >
+                        {isLoadingMore ? (
+                           <span className="flex items-center"><div className="w-3 h-3 rounded-full border-2 border-slate-500 border-t-transparent animate-spin mr-2"></div> Loading...</span>
+                        ) : (
+                           <span className="flex items-center"><ChevronDown size={14} className="mr-1" /> 加载更多 ({imageUrls.length - visibleSamples})</span>
+                        )}
+                      </button>
+                    </div>
+                  )}
                </div>
            </div>
         </div>

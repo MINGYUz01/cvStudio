@@ -249,7 +249,8 @@ class ClassificationRecognizer:
             "avg_height": 0,
             "width_range": [0, 0],
             "height_range": [0, 0],
-            "sample_images": {}
+            "sample_images": {},
+            "image_paths": []  # 添加图像路径列表
         }
 
         try:
@@ -261,6 +262,7 @@ class ClassificationRecognizer:
         sizes = []
         formats = {}
         total_images = 0
+        all_image_paths = []  # 收集所有图像路径
 
         # 从每个类别目录中抽样分析图像
         for class_name, class_info in list(class_directories.items())[:10]:  # 最多分析10个类别
@@ -269,34 +271,38 @@ class ClassificationRecognizer:
 
             for img_file in class_path.iterdir():
                 if (img_file.is_file() and
-                    img_file.suffix.lower() in self.required_image_extensions and
-                    sample_count < 20):  # 每个类别最多分析20张图像
+                    img_file.suffix.lower() in self.required_image_extensions):
 
-                    try:
-                        with Image.open(img_file) as img:
-                            width, height = img.size
-                            sizes.append((width, height))
+                    # 添加到所有图像路径列表
+                    all_image_paths.append(str(img_file))
 
-                            img_format = img.format or "unknown"
-                            formats[img_format] = formats.get(img_format, 0) + 1
+                    # 只分析前20张用于统计
+                    if sample_count < 20:
+                        try:
+                            with Image.open(img_file) as img:
+                                width, height = img.size
+                                sizes.append((width, height))
 
-                            total_images += 1
-                            sample_count += 1
+                                img_format = img.format or "unknown"
+                                formats[img_format] = formats.get(img_format, 0) + 1
 
-                            # 保存样本图像信息
-                            if class_name not in images_info["sample_images"]:
-                                images_info["sample_images"][class_name] = []
+                                sample_count += 1
 
-                            if len(images_info["sample_images"][class_name]) < 3:
-                                images_info["sample_images"][class_name].append({
-                                    "filename": img_file.name,
-                                    "width": width,
-                                    "height": height,
-                                    "format": img_format
-                                })
+                                # 保存样本图像信息
+                                if class_name not in images_info["sample_images"]:
+                                    images_info["sample_images"][class_name] = []
 
-                    except Exception:
-                        continue
+                                if len(images_info["sample_images"][class_name]) < 3:
+                                    images_info["sample_images"][class_name].append({
+                                        "filename": img_file.name,
+                                        "width": width,
+                                        "height": height,
+                                        "format": img_format,
+                                        "path": str(img_file)  # 添加路径信息
+                                    })
+
+                        except Exception:
+                            continue
 
                     if total_images >= 200:  # 最多分析200张图像
                         break
@@ -306,6 +312,7 @@ class ClassificationRecognizer:
 
         images_info["total_images"] = sum(info.get("image_count", 0) for info in class_directories.values())
         images_info["analyzed_images"] = len(sizes)
+        images_info["image_paths"] = all_image_paths  # 保存所有图像路径
 
         if sizes:
             widths = [w for w, h in sizes]

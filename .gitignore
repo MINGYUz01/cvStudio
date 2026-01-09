@@ -68,3 +68,5 @@ backend/cvstudio.db
 # Temporary files
 nul
 *.tmp
+# Generated data files
+data/
