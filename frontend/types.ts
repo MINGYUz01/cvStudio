@@ -20,13 +20,22 @@ export interface MetricCardProps {
   onClick?: () => void;
 }
 
+export interface DatasetStats {
+  numClasses: number;
+  avgWidth: number;
+  avgHeight: number;
+  annotationRate: number;  // 标注率（有标注的图片比例，0-1）
+}
+
 export interface DatasetItem {
   id: string;
   name: string;
-  type: 'YOLO' | 'COCO' | 'VOC' | 'Folder';
+  type: string;  // 支持更多格式: 'YOLO' | 'COCO' | 'VOC' | 'CLASSIFICATION' | 'UNKNOWN' | 'Folder'
   count: number;
   size: string;
   lastModified: string;
+  stats?: DatasetStats;  // 统计信息（从meta中提取）
+  rawMeta?: Record<string, any>;  // 原始元数据（用于获取更详细的信息）
 }
 
 export interface ModelNode {

@@ -187,6 +187,7 @@ class YOLORecognizer:
         class_counts = {}
         object_counts = []
         valid_labels = 0
+        annotated_images = 0  # 有标注的图片数
 
         for label_file in label_files[:100]:  # 最多分析100个标签文件
             try:
@@ -206,12 +207,14 @@ class YOLORecognizer:
 
                 if file_objects > 0:
                     object_counts.append(file_objects)
+                    annotated_images += 1  # 统计有标注的图片
 
             except Exception:
                 continue
 
         return {
             "valid_labels": valid_labels,
+            "annotated_images": annotated_images,  # 添加有标注的图片数
             "class_distribution": class_counts,
             "avg_objects_per_image": sum(object_counts) / len(object_counts) if object_counts else 0,
             "max_objects_per_image": max(object_counts) if object_counts else 0

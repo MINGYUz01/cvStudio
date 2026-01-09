@@ -202,6 +202,82 @@ class DatasetServiceClass {
   }
 
   /**
+   * 上传数据集压缩包
+   * @param name 数据集名称
+   * @param description 数据集描述
+   * @param archive 压缩包文件
+   * @param onProgress 上传进度回调
+   * @returns 上传的数据集
+   */
+  async uploadDatasetArchive(
+    name: string,
+    description: string | undefined,
+    archive: File,
+    onProgress?: (progress: number) => void
+  ): Promise<Dataset> {
+    const formData = new FormData();
+    formData.append('name', name);
+    if (description) {
+      formData.append('description', description);
+    }
+    formData.append('archive', archive);
+
+    // 使用原生fetch以支持文件上传进度
+    const token = localStorage.getItem('access_token');
+
+    // 创建XMLHttpRequest以支持进度监控
+    return new Promise<Dataset>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+
+      // 监听上传进度
+      xhr.upload.addEventListener('progress', (e) => {
+        if (e.lengthComputable && onProgress) {
+          const progress = Math.round((e.loaded / e.total) * 100);
+          onProgress(progress);
+        }
+      });
+
+      // 监听完成
+      xhr.addEventListener('load', () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try {
+            const result: DatasetResponse = JSON.parse(xhr.responseText);
+            resolve(result.data);
+          } catch (e) {
+            reject(new Error('解析响应失败'));
+          }
+        } else {
+          // 处理错误响应
+          try {
+            const error = JSON.parse(xhr.responseText);
+            // FastAPI 返回格式: { "detail": "错误信息" }
+            const errorMsg = error.detail || error.message || '上传失败';
+            reject(new Error(errorMsg));
+          } catch {
+            // 无法解析JSON，使用状态文本
+            reject(new Error(`上传失败 (${xhr.status}): ${xhr.statusText}`));
+          }
+        }
+      });
+
+      // 监听错误
+      xhr.addEventListener('error', () => {
+        reject(new Error('网络错误，上传失败'));
+      });
+
+      // 监听取消
+      xhr.addEventListener('abort', () => {
+        reject(new Error('上传已取消'));
+      });
+
+      // 发送请求
+      xhr.open('POST', `${apiClient['baseURL']}${this.baseUrl}/upload-archive`);
+      xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+      xhr.send(formData);
+    });
+  }
+
+  /**
    * 注册现有数据集
    * @param data 注册数据
    * @returns 注册的数据集
@@ -343,6 +419,21 @@ class DatasetServiceClass {
     return imagePaths.map((_: string, index: number) =>
       this.getImageUrl(dataset.id, index)
     );
+  }
+
+  /**
+   * 获取数据集目录结构
+   * @param id 数据集ID
+   * @param maxDepth 最大递归深度
+   * @returns 目录结构树
+   */
+  async getDirectoryStructure(id: number, maxDepth: number = 5): Promise<any> {
+    const response = await apiClient.get<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`${this.baseUrl}/${id}/structure?max_depth=${maxDepth}`);
+    return response.data;
   }
 }
 

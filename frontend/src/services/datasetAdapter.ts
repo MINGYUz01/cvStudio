@@ -6,6 +6,16 @@
 import { Dataset } from './datasets';
 
 /**
+ * 统计信息接口
+ */
+export interface DatasetStats {
+  numClasses: number;
+  avgWidth: number;
+  avgHeight: number;
+  annotationRate: number;  // 标注率（有标注的图片比例，0-1）
+}
+
+/**
  * 前端组件使用的数据集项格式
  */
 export interface DatasetItem {
@@ -15,6 +25,47 @@ export interface DatasetItem {
   count: number;
   size: string;
   lastModified: string;
+  stats?: DatasetStats;  // 统计信息（从meta中提取）
+  rawMeta?: Record<string, any>;  // 原始元数据（用于获取更详细的信息）
+}
+
+/**
+ * 从元数据中提取统计信息
+ */
+function extractStats(dataset: Dataset): DatasetStats | undefined {
+  const meta = dataset.meta;
+  if (!meta) return undefined;
+
+  const imageStats = meta.image_stats || {};
+  const labelStats = meta.label_stats || {};
+
+  // 类别数：优先使用num_classes字段，其次从label_stats中获取
+  const numClasses = dataset.num_classes || Object.keys(labelStats.class_distribution || {}).length || 0;
+
+  // 平均分辨率
+  const avgWidth = imageStats.avg_width || 0;
+  const avgHeight = imageStats.avg_height || 0;
+
+  // 标注率计算：有标注的图片数 / 总图片数
+  // 对于YOLO格式：valid_labels / num_images
+  // 对于COCO/VOC格式：annotated_images / num_images
+  let annotationRate = 0;
+  if (dataset.num_images > 0) {
+    const annotatedImages = labelStats.annotated_images || labelStats.valid_labels || 0;
+    annotationRate = annotatedImages / dataset.num_images;
+  }
+
+  // 对于classification格式，所有图片都有标注（按文件夹分类）
+  if (dataset.format === 'classification' && dataset.num_images > 0) {
+    annotationRate = 1;
+  }
+
+  return {
+    numClasses,
+    avgWidth,
+    avgHeight,
+    annotationRate,
+  };
 }
 
 /**
@@ -27,7 +78,9 @@ export function adaptDatasetToItem(dataset: Dataset): DatasetItem {
     type: dataset.format.toUpperCase(),
     count: dataset.num_images,
     size: formatSize(dataset.meta?.size || 0),
-    lastModified: formatDate(dataset.created_at),
+    lastModified: formatAbsoluteDate(dataset.created_at),
+    stats: extractStats(dataset),
+    rawMeta: dataset.meta,
   };
 }
 

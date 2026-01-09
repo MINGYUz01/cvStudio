@@ -93,11 +93,16 @@ async def get_datasets(
     current_user: User = Depends(get_current_user)
 ):
     """
-    获取数据集列表
+    获取数据集列表（自动清理文件不存在的记录）
     """
     import sys
     print(f"DEBUG: get_datasets called with skip={skip}, limit={limit}", file=sys.stderr)
     try:
+        # 自动清理文件不存在的数据集记录
+        cleaned_ids = dataset_service.cleanup_missing_datasets(db)
+        if cleaned_ids:
+            print(f"DEBUG: Cleaned up missing datasets: {cleaned_ids}", file=sys.stderr)
+
         datasets = dataset_service.get_datasets(
             db=db,
             skip=skip,
@@ -205,7 +210,7 @@ async def delete_dataset(
     current_user: User = Depends(get_current_user)
 ):
     """
-    删除数据集（软删除）
+    删除数据集（物理删除，同时删除数据库记录和文件）
     """
     try:
         success = dataset_service.delete_dataset(db, dataset_id)
@@ -927,3 +932,81 @@ async def get_dataset_image_file(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取图像文件失败: {str(e)}")
+
+
+# ========== 压缩包上传API端点 ==========
+
+@router.post("/upload-archive", response_model=APIResponse[DatasetResponse])
+async def upload_dataset_archive(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    name: str = Form(..., description="数据集名称"),
+    description: str = Form(None, description="数据集描述"),
+    archive: UploadFile = File(..., description="压缩包文件")
+):
+    """
+    上传压缩包并创建数据集
+
+    支持的压缩格式：
+    - ZIP (.zip)
+    - TAR (.tar)
+    - TAR+GZ (.tar.gz, .tgz)
+    - TAR+BZ2 (.tar.bz2, .tbz2)
+    - TAR+XZ (.tar.xz, .txz)
+    - 7Z (.7z)
+
+    上传后会自动：
+    1. 解压到数据集存储目录
+    2. 识别数据集格式（YOLO/COCO/VOC/Classification）
+    3. 提取元数据信息
+    4. 生成缩略图
+    """
+    try:
+        dataset = await dataset_service.create_dataset_from_archive(
+            db=db,
+            name=name,
+            description=description,
+            archive=archive,
+            user_id=current_user.id
+        )
+        return APIResponse(
+            success=True,
+            message=f"数据集 '{name}' 创建成功",
+            data=dataset
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"上传数据集压缩包失败: {str(e)}")
+
+
+# ========== 目录结构API端点 ==========
+
+@router.get("/{dataset_id}/structure")
+async def get_dataset_structure(
+    dataset_id: int,
+    max_depth: int = Query(5, ge=1, le=10, description="最大递归深度"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    获取数据集目录结构
+
+    当数据集格式无法识别时，使用此接口获取文件夹结构树
+    """
+    try:
+        dataset = dataset_service.get_dataset(db, dataset_id)
+        if not dataset:
+            raise HTTPException(status_code=404, detail=f"数据集 {dataset_id} 不存在")
+
+        structure = dataset_service.get_directory_structure(dataset.path, max_depth)
+
+        return {
+            "success": True,
+            "message": "获取目录结构成功",
+            "data": structure
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"获取目录结构失败: {str(e)}")

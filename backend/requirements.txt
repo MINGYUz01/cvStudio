@@ -39,6 +39,8 @@ websockets==12.0
 # 文件处理
 aiofiles==23.2.1
 python-magic==0.4.27
+py7zr>=0.20.0  # 7z格式支持
+chardet>=5.0.0  # 编码检测（用于修复ZIP文件名乱码）
 
 # HTTP客户端
 httpx==0.25.2

@@ -5,6 +5,9 @@
 import os
 import shutil
 import asyncio
+import zipfile
+import tarfile
+import tempfile
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from collections import Counter
@@ -14,6 +17,19 @@ from sqlalchemy.orm import Session
 from app.models.dataset import Dataset
 from app.utils.format_recognizers import DatasetFormatRecognizer
 from app.core.config import settings
+
+# 支持的压缩格式
+SUPPORTED_ARCHIVE_FORMATS = {
+    '.zip': 'zip',
+    '.tar': 'tar',
+    '.tar.gz': 'tar.gz',
+    '.tgz': 'tar.gz',
+    '.tar.bz2': 'tar.bz2',
+    '.tbz2': 'tar.bz2',
+    '.tar.xz': 'tar.xz',
+    '.txz': 'tar.xz',
+    '.7z': '7z',
+}
 
 
 class DatasetService:
@@ -71,7 +87,7 @@ class DatasetService:
             best_format = format_result["best_format"]
 
             # 提取数据集元信息
-            metadata = self._extract_metadata(format_result)
+            metadata = self._extract_metadata(format_result, dataset_dir)
 
             # 创建数据集记录
             dataset = Dataset(
@@ -138,7 +154,7 @@ class DatasetService:
                 raise HTTPException(status_code=400, detail=f"无法识别数据集格式，置信度太低: {best_format.get('error')}")
 
             # 提取数据集元信息
-            metadata = self._extract_metadata(format_result)
+            metadata = self._extract_metadata(format_result, Path(dataset_path))
 
             # 创建数据集记录
             dataset = Dataset(
@@ -163,6 +179,349 @@ class DatasetService:
 
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"注册数据集失败: {str(e)}")
+
+    async def create_dataset_from_archive(self,
+                                         db: Session,
+                                         name: str,
+                                         description: str,
+                                         archive: UploadFile,
+                                         user_id: int = None) -> Dataset:
+        """
+        从上传的压缩包创建数据集
+
+        Args:
+            db: 数据库会话
+            name: 数据集名称
+            description: 数据集描述
+            archive: 上传的压缩包文件
+            user_id: 用户ID
+
+        Returns:
+            Dataset: 创建的数据集对象
+
+        Raises:
+            HTTPException: 当压缩格式不支持或解压失败时
+        """
+        # 检查数据集名称是否已存在
+        existing_dataset = db.query(Dataset).filter(Dataset.name == name).first()
+        if existing_dataset:
+            raise HTTPException(status_code=400, detail=f"数据集名称 '{name}' 已存在")
+
+        # 检查压缩格式
+        filename = archive.filename or ""
+        archive_format = None
+        for ext, fmt in SUPPORTED_ARCHIVE_FORMATS.items():
+            if filename.lower().endswith(ext):
+                archive_format = fmt
+                break
+
+        if not archive_format:
+            raise HTTPException(
+                status_code=400,
+                detail=f"不支持的压缩格式。支持的格式: {', '.join(SUPPORTED_ARCHIVE_FORMATS.keys())}"
+            )
+
+        # 创建数据集存储目录
+        dataset_dir = self.storage_path / name
+        if dataset_dir.exists():
+            raise HTTPException(status_code=400, detail=f"数据集目录 '{name}' 已存在")
+
+        dataset_dir.mkdir(parents=True, exist_ok=True)
+
+        # 创建临时目录保存压缩包
+        temp_dir = Path(tempfile.gettempdir()) / f"dataset_upload_{name}"
+        temp_dir.mkdir(exist_ok=True)
+
+        try:
+            # 保存上传的压缩包到临时目录
+            temp_archive_path = temp_dir / Path(filename).name
+            with open(temp_archive_path, "wb") as buffer:
+                content = await archive.read()
+                buffer.write(content)
+
+            # 解压压缩包
+            await self._extract_archive(temp_archive_path, dataset_dir, archive_format)
+
+            # 验证解压后的目录是否有内容
+            if not any(dataset_dir.iterdir()):
+                raise HTTPException(status_code=400, detail="压缩包解压后为空，请检查压缩包内容")
+
+            # 识别数据集格式
+            format_result = self.format_recognizer.recognize_format(str(dataset_dir))
+            best_format = format_result["best_format"]
+
+            # 提取数据集元信息
+            metadata = self._extract_metadata(format_result, dataset_dir)
+
+            # 创建数据集记录
+            dataset = Dataset(
+                name=name,
+                description=description,
+                path=str(dataset_dir),
+                format=best_format["format"],
+                num_images=metadata.get("num_images", 0),
+                num_classes=metadata.get("num_classes", 0),
+                classes=metadata.get("classes", []),
+                meta=metadata
+            )
+
+            db.add(dataset)
+            db.commit()
+            db.refresh(dataset)
+
+            # 生成缩略图（异步执行）
+            asyncio.create_task(self._generate_thumbnails_async(dataset.id, str(dataset_dir)))
+
+            return dataset
+
+        except HTTPException:
+            # 如果是HTTP异常，清理目录后重新抛出
+            if dataset_dir.exists():
+                shutil.rmtree(dataset_dir)
+            raise
+        except Exception as e:
+            # 如果失败，清理已创建的目录
+            if dataset_dir.exists():
+                shutil.rmtree(dataset_dir)
+            raise HTTPException(status_code=500, detail=f"创建数据集失败: {str(e)}")
+        finally:
+            # 清理临时目录
+            if temp_dir.exists():
+                shutil.rmtree(temp_dir, ignore_errors=True)
+
+    async def _extract_archive(self, archive_path: Path, extract_to: Path, archive_format: str) -> None:
+        """
+        解压压缩包到指定目录
+
+        Args:
+            archive_path: 压缩包路径
+            extract_to: 解压目标目录
+            archive_format: 压缩格式
+
+        Raises:
+            HTTPException: 当解压失败时
+        """
+        try:
+            if archive_format == 'zip':
+                self._extract_zip(archive_path, extract_to)
+            elif archive_format in ('tar', 'tar.gz', 'tar.bz2', 'tar.xz'):
+                self._extract_tar(archive_path, extract_to)
+            elif archive_format == '7z':
+                await self._extract_7z(archive_path, extract_to)
+            else:
+                raise HTTPException(status_code=400, detail=f"不支持的压缩格式: {archive_format}")
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"解压文件失败: {str(e)}")
+
+    def _extract_zip(self, archive_path: Path, extract_to: Path) -> None:
+        """解压ZIP文件（扁平化解压，移除单层根目录）"""
+        import locale
+        import chardet
+
+        # 获取系统默认编码
+        system_encoding = locale.getpreferredencoding(False) or 'utf-8'
+
+        def fix_filename_encoding(filename: str) -> str:
+            """
+            修复ZIP文件中的文件名编码问题
+
+            某些ZIP工具（特别是Windows上的老版本工具）使用本地编码（如GBK）
+            而不是UTF-8来存储非ASCII文件名，导致解压时出现乱码
+            """
+            # 如果文件名只包含ASCII字符，直接返回
+            try:
+                filename.encode('ascii')
+                return filename
+            except UnicodeEncodeError:
+                pass
+
+            # 尝试检测并修复编码
+            # 方法1: 检查是否是UTF-8编码的字节被错误地用CP437解码了（Python zipfile的默认行为）
+            try:
+                # zipfile在Windows上通常用CP437解码非UTF-8的文件名
+                # 尝试反向编码后再用正确编码解码
+                decoded = filename.encode('cp437').decode('utf-8')
+                return decoded
+            except (UnicodeEncodeError, UnicodeDecodeError):
+                pass
+
+            # 方法2: 尝试用系统编码（Windows上通常是GBK）
+            try:
+                decoded = filename.encode('cp437').decode(system_encoding)
+                return decoded
+            except (UnicodeEncodeError, UnicodeDecodeError):
+                pass
+
+            # 方法3: 使用chardet检测编码
+            try:
+                raw_bytes = filename.encode('cp437')
+                detected = chardet.detect(raw_bytes)
+                if detected['encoding']:
+                    decoded = raw_bytes.decode(detected['encoding'])
+                    return decoded
+            except Exception:
+                pass
+
+            # 如果所有方法都失败，返回原文件名
+            return filename
+
+        with zipfile.ZipFile(archive_path, 'r') as zip_ref:
+            # 检查ZIP文件是否有安全风险（路径遍历攻击）
+            for member in zip_ref.namelist():
+                if ".." in member or member.startswith("/"):
+                    raise HTTPException(status_code=400, detail="压缩包包含不安全的路径")
+
+            # 获取所有成员并修复文件名编码
+            all_members = zip_ref.namelist()
+            if not all_members:
+                raise HTTPException(status_code=400, detail="压缩包为空")
+
+            # 修复所有文件名的编码
+            fixed_members = [fix_filename_encoding(name) for name in all_members]
+
+            # 检查是否只有一个根目录
+            root_dirs = set()
+            for name in fixed_members:
+                if '/' in name:
+                    root_dirs.add(name.split('/')[0])
+                elif '\\' in name:
+                    root_dirs.add(name.split('\\')[0])
+
+            # 如果只有一个根目录，需要扁平化解压
+            strip_prefix = None
+            if len(root_dirs) == 1:
+                strip_prefix = list(root_dirs)[0] + ('/' if '/' in fixed_members[0] else '\\')
+
+            # 解压所有文件
+            for i, member in enumerate(zip_ref.infolist()):
+                # 跳过目录本身
+                if member.is_dir():
+                    continue
+
+                # 使用修复后的文件名
+                target_path = fixed_members[i]
+                if strip_prefix and target_path.startswith(strip_prefix):
+                    target_path = target_path[len(strip_prefix):]
+
+                # 安全检查
+                if ".." in target_path or target_path.startswith("/") or target_path.startswith("\\"):
+                    continue
+
+                output_path = extract_to / target_path
+
+                # 确保目标目录存在
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+
+                # 解压文件
+                with zip_ref.open(member) as source, open(output_path, "wb") as target:
+                    target.write(source.read())
+
+    def _extract_tar(self, archive_path: Path, extract_to: Path) -> None:
+        """解压TAR文件（扁平化解压，移除单层根目录）"""
+        with tarfile.open(archive_path, 'r:*') as tar_ref:
+            # 检查TAR文件是否有安全风险
+            for member in tar_ref.getnames():
+                if ".." in member or member.startswith("/"):
+                    raise HTTPException(status_code=400, detail="压缩包包含不安全的路径")
+
+            # 获取所有成员，检查是否只有一个根目录
+            all_members = [m for m in tar_ref.getnames() if m]
+            if not all_members:
+                raise HTTPException(status_code=400, detail="压缩包为空")
+
+            # 检查是否只有一个根目录
+            root_dirs = set()
+            for name in all_members:
+                if '/' in name:
+                    root_dirs.add(name.split('/')[0])
+
+            # 如果只有一个根目录，需要扁平化解压
+            strip_prefix = None
+            if len(root_dirs) == 1:
+                strip_prefix = list(root_dirs)[0] + '/'
+
+            # 解压所有文件
+            for member in tar_ref.getmembers():
+                if member.isdir():
+                    continue
+
+                # 处理路径
+                target_path = member.name
+                if strip_prefix and target_path.startswith(strip_prefix):
+                    target_path = target_path[len(strip_prefix):]
+
+                # 安全检查
+                if ".." in target_path or target_path.startswith("/"):
+                    continue
+
+                output_path = extract_to / target_path
+
+                # 确保目标目录存在
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+
+                # 解压文件
+                file = tar_ref.extractfile(member)
+                if file:
+                    with open(output_path, "wb") as f:
+                        f.write(file.read())
+
+    async def _extract_7z(self, archive_path: Path, extract_to: Path) -> None:
+        """解压7z文件（扁平化解压，移除单层根目录）"""
+        try:
+            import py7zr
+            import shutil
+
+            # 先解压到临时目录
+            temp_extract_dir = archive_path.parent / f"temp_extract_{archive_path.stem}"
+            temp_extract_dir.mkdir(exist_ok=True)
+
+            with py7zr.SevenZipFile(archive_path, mode='r') as seven_zip:
+                # 检查文件列表安全性
+                all_names = seven_zip.getnames()
+                for member in all_names:
+                    if ".." in member or member.startswith("/"):
+                        raise HTTPException(status_code=400, detail="压缩包包含不安全的路径")
+
+                # 解压到临时目录
+                seven_zip.extractall(path=str(temp_extract_dir))
+
+            # 检查是否只有一个根目录
+            contents = list(temp_extract_dir.iterdir())
+            if len(contents) == 1 and contents[0].is_dir():
+                # 只有一个根目录，扁平化处理：移动其内容到目标目录
+                single_root = contents[0]
+                for item in single_root.iterdir():
+                    dest = extract_to / item.name
+                    if dest.exists():
+                        # 目标已存在，删除或跳过
+                        if dest.is_dir():
+                            shutil.rmtree(dest, ignore_errors=True)
+                        else:
+                            dest.unlink()
+                    shutil.move(str(item), str(dest))
+            else:
+                # 多个根目录或文件，直接移动所有内容
+                for item in contents:
+                    dest = extract_to / item.name
+                    if dest.exists():
+                        if dest.is_dir():
+                            shutil.rmtree(dest, ignore_errors=True)
+                        else:
+                            dest.unlink()
+                    shutil.move(str(item), str(dest))
+
+            # 清理临时目录
+            shutil.rmtree(temp_extract_dir, ignore_errors=True)
+
+        except ImportError:
+            raise HTTPException(
+                status_code=500,
+                detail="7z格式支持未安装，请运行: pip install py7zr"
+            )
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"解压7z文件失败: {str(e)}")
 
     def get_dataset(self, db: Session, dataset_id: int) -> Optional[Dataset]:
         """
@@ -232,13 +591,14 @@ class DatasetService:
         db.refresh(dataset)
         return dataset
 
-    def delete_dataset(self, db: Session, dataset_id: int) -> bool:
+    def delete_dataset(self, db: Session, dataset_id: int, physical: bool = True) -> bool:
         """
-        删除数据集（软删除）
+        删除数据集（物理删除，同时删除数据库记录和文件）
 
         Args:
             db: 数据库会话
             dataset_id: 数据集ID
+            physical: 是否物理删除文件，默认为True
 
         Returns:
             bool: 是否删除成功
@@ -247,15 +607,54 @@ class DatasetService:
         if not dataset:
             return False
 
-        dataset.is_active = "deleted"
-        db.commit()
+        dataset_path = Path(dataset.path)
 
-        # 可选：清理缩略图
+        # 清理缩略图
         dataset_thumbnail_dir = self.thumbnail_path / str(dataset_id)
         if dataset_thumbnail_dir.exists():
             shutil.rmtree(dataset_thumbnail_dir)
 
+        # 物理删除：删除数据集目录
+        if physical and dataset_path.exists():
+            try:
+                shutil.rmtree(dataset_path)
+            except Exception as e:
+                # 记录日志但继续删除数据库记录
+                print(f"警告：删除数据集目录失败: {e}")
+
+        # 从数据库中删除记录
+        db.delete(dataset)
+        db.commit()
+
         return True
+
+    def cleanup_missing_datasets(self, db: Session) -> List[int]:
+        """
+        清理文件不存在的数据集记录
+
+        Args:
+            db: 数据库会话
+
+        Returns:
+            List[int]: 被清理的数据集ID列表
+        """
+        from app.models.dataset import Dataset
+
+        # 获取所有活跃的数据集
+        all_datasets = db.query(Dataset).filter(Dataset.is_active == "active").all()
+        cleaned_ids = []
+
+        for dataset in all_datasets:
+            dataset_path = Path(dataset.path)
+            if not dataset_path.exists():
+                # 文件不存在，删除数据库记录
+                cleaned_ids.append(dataset.id)
+                db.delete(dataset)
+
+        if cleaned_ids:
+            db.commit()
+
+        return cleaned_ids
 
     def rescan_dataset(self, db: Session, dataset_id: int) -> Optional[Dataset]:
         """
@@ -278,7 +677,7 @@ class DatasetService:
             best_format = format_result["best_format"]
 
             # 提取数据集元信息
-            metadata = self._extract_metadata(format_result)
+            metadata = self._extract_metadata(format_result, Path(dataset.path))
 
             # 更新数据集信息
             dataset.format = best_format["format"]
@@ -298,12 +697,89 @@ class DatasetService:
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"重新扫描数据集失败: {str(e)}")
 
-    def _extract_metadata(self, format_result: Dict) -> Dict:
+    def get_directory_structure(self, dataset_path: str, max_depth: int = 5) -> Dict:
+        """
+        获取数据集目录结构
+
+        Args:
+            dataset_path: 数据集路径
+            max_depth: 最大递归深度
+
+        Returns:
+            Dict: 目录树结构
+        """
+        path = Path(dataset_path)
+        if not path.exists():
+            return {"name": "root", "type": "error", "message": "目录不存在"}
+
+        def build_tree(current_path: Path, current_name: str, depth: int) -> Dict:
+            """递归构建目录树"""
+            if depth > max_depth:
+                return {"name": current_name, "type": "folder", "children": [], "truncated": True}
+
+            try:
+                if current_path.is_dir():
+                    children = []
+                    try:
+                        # 获取目录内容，排序：文件夹在前，文件在后
+                        items = sorted(current_path.iterdir(), key=lambda x: (not x.is_dir(), x.name))
+                        # 限制每个目录最多显示的子项数量
+                        for item in items[:100]:  # 最多100个子项
+                            if item.name.startswith('.'):  # 跳过隐藏文件
+                                continue
+                            children.append(build_tree(item, item.name, depth + 1))
+                    except PermissionError:
+                        pass
+
+                    return {
+                        "name": current_name,
+                        "type": "folder",
+                        "path": str(current_path.relative_to(path)) if current_path != path else "",
+                        "children": children,
+                        "child_count": len(children)
+                    }
+                else:
+                    # 判断是否为图片文件
+                    is_image = current_path.suffix.lower() in ('.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.tiff')
+                    return {
+                        "name": current_name,
+                        "type": "file",
+                        "extension": current_path.suffix,
+                        "is_image": is_image,
+                        "size": current_path.stat().st_size if current_path.exists() else 0
+                    }
+            except Exception:
+                return {"name": current_name, "type": "error", "message": "无法访问"}
+
+        return build_tree(path, path.name, 0)
+
+    def _calculate_dataset_size(self, dataset_path: Path) -> int:
+        """
+        计算数据集总大小（字节）
+
+        Args:
+            dataset_path: 数据集路径
+
+        Returns:
+            int: 数据集总大小（字节）
+        """
+        total_size = 0
+        try:
+            for item in dataset_path.rglob('*'):
+                if item.is_file():
+                    total_size += item.stat().st_size
+        except Exception as e:
+            print(f"计算数据集大小时出错: {e}")
+
+        return total_size
+
+    def _extract_metadata(self, format_result: Dict, dataset_path: Path = None) -> Dict:
         """
         从格式识别结果中提取元信息
 
         Args:
             format_result: 格式识别结果
+            dataset_path: 数据集路径（可选，用于计算大小）
 
         Returns:
             Dict: 提取的元信息
@@ -321,6 +797,10 @@ class DatasetService:
         metadata["num_images"] = details.get("num_images", 0)
         metadata["num_classes"] = details.get("num_classes", 0)
         metadata["classes"] = details.get("classes", [])
+
+        # 计算数据集大小
+        if dataset_path:
+            metadata["size"] = self._calculate_dataset_size(dataset_path)
 
         # 格式特定信息
         if best_format["format"] == "yolo":
@@ -349,13 +829,14 @@ class DatasetService:
                 "image_paths": details.get("image_files", [])  # 保存图像路径列表
             })
         elif best_format["format"] == "classification":
+            # 对于分类格式，_analyze_images的结果直接在details中
             metadata.update({
                 "class_directories": details.get("classes", {}),
                 "structure": details.get("structure", {}),
                 "size_distribution": details.get("size_distribution", {}),
                 "format_distribution": details.get("format_distribution", {}),
-                # 对于分类格式，从sample_images或class_directories中提取图像路径
-                "image_paths": details.get("sample_images", [])
+                # 使用完整的图像路径列表
+                "image_paths": details.get("image_paths", [])
             })
 
         return metadata
