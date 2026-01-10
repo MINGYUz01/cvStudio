@@ -26,6 +26,7 @@ class User(Base):
     models = relationship("Model", back_populates="creator")
     training_runs = relationship("TrainingRun", back_populates="creator")
     inference_jobs = relationship("InferenceJob", back_populates="creator")
+    augmentation_strategies = relationship("AugmentationStrategy", back_populates="user")
 
     def __repr__(self):
         return f"<User(id={self.id}, username='{self.username}', email='{self.email}')>"
