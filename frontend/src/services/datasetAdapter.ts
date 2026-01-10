@@ -25,6 +25,7 @@ export interface DatasetItem {
   count: number;
   size: string;
   lastModified: string;
+  description?: string;  // 数据集描述
   stats?: DatasetStats;  // 统计信息（从meta中提取）
   rawMeta?: Record<string, any>;  // 原始元数据（用于获取更详细的信息）
 }
@@ -79,6 +80,7 @@ export function adaptDatasetToItem(dataset: Dataset): DatasetItem {
     count: dataset.num_images,
     size: formatSize(dataset.meta?.size || 0),
     lastModified: formatAbsoluteDate(dataset.created_at),
+    description: dataset.description,
     stats: extractStats(dataset),
     rawMeta: dataset.meta,
   };

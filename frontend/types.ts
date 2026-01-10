@@ -34,6 +34,7 @@ export interface DatasetItem {
   count: number;
   size: string;
   lastModified: string;
+  description?: string;  // 数据集描述
   stats?: DatasetStats;  // 统计信息（从meta中提取）
   rawMeta?: Record<string, any>;  // 原始元数据（用于获取更详细的信息）
 }
@@ -64,4 +65,94 @@ export interface WeightCheckpoint {
   accuracy: string; // e.g., 'mAP 0.89'
   created: string;
   tags: string[];
+}
+
+// ==================== 数据增强相关类型 ====================
+
+export type ParamType = 'boolean' | 'integer' | 'float' | 'range' | 'select';
+
+export interface AugmentationParam {
+  name: string;
+  label_zh: string;
+  label_en: string;
+  type: ParamType;
+  default: any;
+  min_value?: number;
+  max_value?: number;
+  step?: number;
+  options?: Array<{ label: string; value: any }>;
+  description: string;
+}
+
+export interface AugmentationOperator {
+  id: string;
+  name_zh: string;
+  name_en: string;
+  category: string;
+  category_label_zh: string;
+  category_label_en: string;
+  description: string;
+  enabled: boolean;
+  params: AugmentationParam[];
+}
+
+export interface PipelineItem {
+  instanceId: string;
+  operatorId: string;
+  enabled: boolean;
+  params: Record<string, any>;
+}
+
+export interface AugmentationStrategy {
+  id: number;
+  user_id: number;
+  name: string;
+  description: string | null;
+  pipeline: PipelineItem[];
+  is_default: boolean;
+  created_at: string;
+  updated_at: string | null;
+}
+
+export interface AugmentationOperatorsResponse {
+  [category: string]: {
+    category: string;
+    label_zh: string;
+    label_en: string;
+    operators: AugmentationOperator[];
+  };
+}
+
+export interface AugmentationStrategyListResponse {
+  strategies: AugmentationStrategy[];
+  total: number;
+}
+
+export interface AugmentedImage {
+  original_path: string;
+  augmented_data: string;  // base64编码
+  augmentation_config: any;
+  applied_operations: string[];
+}
+
+export interface AugmentationPreview {
+  original_image: string;  // base64编码
+  augmented_images: AugmentedImage[];
+  augmentation_summary: {
+    total_operators: number;
+    applied_operators: number;
+    operations_used: string[];
+    image_info?: {
+      width: number;
+      height: number;
+      format: string;
+      size: number;
+    };
+  };
+}
+
+export interface APIResponse<T> {
+  success: boolean;
+  message: string;
+  data: T;
 }

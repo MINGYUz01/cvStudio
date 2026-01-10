@@ -20,6 +20,7 @@ import {
   Loader2,
   Trash2,
   FileImage,
+  FileText,
   Filter,
   SlidersHorizontal
 } from 'lucide-react';
@@ -340,6 +341,67 @@ const DeleteDatasetDialog: React.FC<DeleteDatasetDialogProps> = ({
                 确认删除
               </>
             )}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// --- View Description Dialog Component ---
+interface ViewDescriptionDialogProps {
+  isOpen: boolean;
+  onClose: () => void;
+  datasetName: string;
+  description?: string;
+}
+
+const ViewDescriptionDialog: React.FC<ViewDescriptionDialogProps> = ({
+  isOpen,
+  onClose,
+  datasetName,
+  description
+}) => {
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 z-[150] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+      <div className="bg-slate-900 border border-slate-700 p-6 rounded-xl w-full max-w-lg shadow-2xl animate-in fade-in zoom-in duration-200">
+        {/* Header */}
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center">
+            <div className="w-10 h-10 rounded-full flex items-center justify-center bg-cyan-900/30 text-cyan-500 mr-3">
+              <FileText size={20} />
+            </div>
+            <div>
+              <h3 className="text-lg font-bold text-white">{datasetName}</h3>
+              <p className="text-xs text-slate-400">数据集描述</p>
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            className="p-1 rounded hover:bg-slate-800 text-slate-500 hover:text-white transition-colors"
+          >
+            <X size={20} />
+          </button>
+        </div>
+
+        {/* Description Content */}
+        <div className="bg-slate-950 border border-slate-800 rounded-lg p-4 max-h-96 overflow-y-auto custom-scrollbar">
+          {description && description.trim() ? (
+            <p className="text-slate-300 text-sm leading-relaxed whitespace-pre-wrap">{description}</p>
+          ) : (
+            <p className="text-slate-600 text-sm italic">暂无描述</p>
+          )}
+        </div>
+
+        {/* Close Button */}
+        <div className="mt-4 flex justify-end">
+          <button
+            onClick={onClose}
+            className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-lg text-sm transition-colors border border-slate-700"
+          >
+            关闭
           </button>
         </div>
       </div>
@@ -668,6 +730,10 @@ const DatasetManager: React.FC = () => {
   const [datasetToDelete, setDatasetToDelete] = useState<DatasetItem | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
+  // 查看描述弹窗状态
+  const [viewDescriptionDialogOpen, setViewDescriptionDialogOpen] = useState(false);
+  const [datasetToViewDescription, setDatasetToViewDescription] = useState<DatasetItem | null>(null);
+
   // 当数据集列表加载完成后，设置默认选中项
   useEffect(() => {
     if (filteredDatasets.length > 0 && !selectedDsId) {
@@ -978,6 +1044,20 @@ const DatasetManager: React.FC = () => {
                        <Folder size={16} className={`${selectedDsId === ds.id ? 'text-cyan-400' : 'text-slate-500 group-hover:text-cyan-400 transition-colors'}`} />
                     </div>
                     <span className={`ml-2 text-sm font-medium truncate flex-1 transition-colors ${selectedDsId === ds.id ? 'text-white' : 'text-slate-200 group-hover:text-cyan-400'}`}>{ds.name}</span>
+                    {/* 查看描述按钮 */}
+                    {ds.description && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setDatasetToViewDescription(ds);
+                          setViewDescriptionDialogOpen(true);
+                        }}
+                        className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-cyan-900/30 text-slate-500 hover:text-cyan-400 transition-all"
+                        title="查看描述"
+                      >
+                        <FileText size={14} />
+                      </button>
+                    )}
                     {/* 删除按钮 */}
                     <button
                       onClick={(e) => handleOpenDeleteDialog(ds, e)}
@@ -1156,6 +1236,14 @@ const DatasetManager: React.FC = () => {
         onConfirm={handleConfirmDelete}
         datasetName={datasetToDelete?.name || ''}
         isDeleting={isDeleting}
+      />
+
+      {/* View Description Dialog */}
+      <ViewDescriptionDialog
+        isOpen={viewDescriptionDialogOpen}
+        onClose={() => setViewDescriptionDialogOpen(false)}
+        datasetName={datasetToViewDescription?.name || ''}
+        description={datasetToViewDescription?.description}
       />
     </div>
   );

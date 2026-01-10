@@ -7,6 +7,7 @@ from .dataset import Dataset
 from .model import Model
 from .training import TrainingRun, Checkpoint
 from .inference import InferenceJob
+from .augmentation import AugmentationStrategy
 
 __all__ = [
     "User",
@@ -14,5 +15,6 @@ __all__ = [
     "Model",
     "TrainingRun",
     "Checkpoint",
-    "InferenceJob"
+    "InferenceJob",
+    "AugmentationStrategy"
 ]

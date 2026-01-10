@@ -290,24 +290,44 @@ class ImageProcessor:
 
     def scale_image(self, image: np.ndarray, scale_factor: float) -> np.ndarray:
         """
-        缩放图像
+        缩放图像（保持原始画布尺寸，缩放后的图像居中显示）
 
         Args:
             image: 输入图像
-            scale_factor: 缩放因子
+            scale_factor: 缩放因子（1.0为原始大小）
 
         Returns:
-            缩放后的图像
+            缩放后的图像（居中在原始画布上）
         """
         try:
-            if scale_factor <= 0:
+            if scale_factor <= 0 or scale_factor == 1.0:
                 return image
 
             height, width = image.shape[:2]
             new_width = int(width * scale_factor)
             new_height = int(height * scale_factor)
 
-            return cv2.resize(image, (new_width, new_height), interpolation=cv2.INTER_LINEAR)
+            # 缩放图像
+            scaled = cv2.resize(image, (new_width, new_height), interpolation=cv2.INTER_LINEAR)
+
+            # 如果缩放后尺寸大于原始尺寸，直接返回
+            if new_width >= width and new_height >= height:
+                # 居中裁剪到原始尺寸
+                x = (new_width - width) // 2
+                y = (new_height - height) // 2
+                return scaled[y:y+height, x:x+width]
+
+            # 创建原始尺寸的画布，用白色填充
+            canvas = np.full((height, width, 3), 255, dtype=np.uint8)
+
+            # 计算居中位置
+            x = (width - new_width) // 2
+            y = (height - new_height) // 2
+
+            # 将缩放后的图像放置在画布中心
+            canvas[y:y+new_height, x:x+new_width] = scaled
+
+            return canvas
         except Exception as e:
             logger.error(f"图像缩放失败: {str(e)}")
             return image
@@ -583,6 +603,389 @@ class ImageProcessor:
             logger.error(f"保存图像失败 {output_path}: {str(e)}")
             return False
 
+    def translate_image(self, image: np.ndarray, dx: int, dy: int,
+                        fill_value: int = 255) -> np.ndarray:
+        """
+        平移图像
+
+        Args:
+            image: 输入图像
+            dx: 水平偏移量（像素）
+            dy: 垂直偏移量（像素）
+            fill_value: 填充值（0-255）
+
+        Returns:
+            平移后的图像
+        """
+        try:
+            height, width = image.shape[:2]
+
+            # 创建平移矩阵
+            translation_matrix = np.float32([[1, 0, dx], [0, 1, dy]])
+
+            # 应用平移
+            translated = cv2.warpAffine(
+                image, translation_matrix, (width, height),
+                borderMode=cv2.BORDER_CONSTANT,
+                borderValue=(fill_value, fill_value, fill_value)
+            )
+
+            return translated
+        except Exception as e:
+            logger.error(f"图像平移失败: {str(e)}")
+            return image
+
+    def elastic_transform(self, image: np.ndarray, alpha: float = 1.0,
+                          sigma: float = 50.0) -> np.ndarray:
+        """
+        弹性变换
+
+        Args:
+            image: 输入图像
+            alpha: 形变强度（相对于图像尺寸的比例）
+            sigma: 高斯核标准差
+
+        Returns:
+            变换后的图像
+        """
+        try:
+            import scipy.ndimage as ndimage
+
+            shape = image.shape[:2]
+
+            # 将 alpha 转换为绝对像素值（alpha 作为图像尺寸的比例）
+            alpha_pixels = alpha * min(shape[0], shape[1])
+
+            # 生成随机位移场
+            dx = ndimage.gaussian_filter(np.random.randn(*shape), sigma) * alpha_pixels
+            dy = ndimage.gaussian_filter(np.random.randn(*shape), sigma) * alpha_pixels
+
+            # 创建网格
+            x, y = np.meshgrid(np.arange(shape[1]), np.arange(shape[0]))
+            indices = [y + dy, x + dx]
+
+            # 对每个通道应用变换
+            if len(image.shape) == 3:
+                transformed = np.zeros_like(image)
+                for c in range(image.shape[2]):
+                    transformed[:, :, c] = ndimage.map_coordinates(
+                        image[:, :, c], indices, order=1, mode='constant', cval=255
+                    )
+            else:
+                transformed = ndimage.map_coordinates(
+                    image, indices, order=1, mode='constant', cval=255
+                )
+
+            return transformed.astype(np.uint8)
+        except ImportError:
+            logger.warning("scipy未安装，跳过弹性变换")
+            return image
+        except Exception as e:
+            logger.error(f"弹性变换失败: {str(e)}")
+            return image
+
+    def perspective_transform(self, image: np.ndarray, points: List[tuple]) -> np.ndarray:
+        """
+        透视变换
+
+        Args:
+            image: 输入图像
+            points: 四个点坐标 [(x1,y1), (x2,y2), (x3,y3), (x4,y4)]
+
+        Returns:
+            变换后的图像
+        """
+        try:
+            height, width = image.shape[:2]
+
+            # 默认使用四个角点
+            if len(points) != 4:
+                return image
+
+            # 源点和目标点
+            src_points = np.float32(points)
+            dst_points = np.float32([[0, 0], [width, 0], [width, height], [0, height]])
+
+            # 计算透视变换矩阵
+            matrix = cv2.getPerspectiveTransform(src_points, dst_points)
+
+            # 应用变换
+            transformed = cv2.warpPerspective(image, matrix, (width, height))
+
+            return transformed
+        except Exception as e:
+            logger.error(f"透视变换失败: {str(e)}")
+            return image
+
+    def random_erase(self, image: np.ndarray, probability: float = 0.5,
+                     scale = (0.02, 0.33), ratio = (0.3, 3.3),
+                     value: int = 0) -> np.ndarray:
+        """
+        随机擦除
+
+        Args:
+            image: 输入图像
+            probability: 执行概率
+            scale: 擦除区域比例范围（元组或单个值）
+            ratio: 宽高比范围（元组或单个值）
+            value: 填充值
+
+        Returns:
+            处理后的图像
+        """
+        try:
+            import random
+
+            # 根据概率决定是否执行
+            if random.random() > probability:
+                return image
+
+            height, width = image.shape[:2]
+            area = height * width
+
+            # 处理 scale 参数：支持单个值或元组
+            if isinstance(scale, (int, float)):
+                # 单个值：创建一个小范围（±20%）
+                scale_val = max(0.01, min(float(scale), 0.5))
+                scale_range = (scale_val * 0.8, scale_val * 1.2)
+            else:
+                # 元组：直接使用
+                scale_range = scale
+
+            # 处理 ratio 参数：支持单个值或元组
+            if isinstance(ratio, (int, float)):
+                # 单个值：创建一个小范围（±20%）
+                ratio_val = max(0.1, min(float(ratio), 10.0))
+                ratio_range = (ratio_val * 0.8, ratio_val * 1.2)
+            else:
+                # 元组：直接使用
+                ratio_range = ratio
+
+            # 随机生成擦除区域参数
+            target_area = random.uniform(*scale_range) * area
+            aspect_ratio = random.uniform(*ratio_range)
+
+            h = int(round((target_area * aspect_ratio) ** 0.5))
+            w = int(round((target_area / aspect_ratio) ** 0.5))
+
+            # 确保不越界
+            if h < 1 or w < 1 or h > height or w > width:
+                return image
+
+            # 随机位置
+            top = random.randint(0, height - h)
+            left = random.randint(0, width - w)
+
+            # 复制图像并填充
+            result = image.copy()
+            if len(result.shape) == 3:
+                result[top:top+h, left:left+w, :] = value
+            else:
+                result[top:top+h, left:left+w] = value
+
+            return result
+        except Exception as e:
+            logger.error(f"随机擦除失败: {str(e)}")
+            return image
+
+    def gamma_correction(self, image: np.ndarray, gamma: float = 1.0) -> np.ndarray:
+        """
+        Gamma校正
+
+        Args:
+            image: 输入图像
+            gamma: Gamma值
+
+        Returns:
+            校正后的图像
+        """
+        try:
+            # 确保gamma在合理范围
+            gamma = max(0.1, min(10.0, gamma))
+
+            # 构建查找表
+            inv_gamma = 1.0 / gamma
+            table = np.array([((i / 255.0) ** inv_gamma) * 255
+                            for i in np.arange(0, 256)]).astype("uint8")
+
+            # 应用查找表
+            corrected = cv2.LUT(image, table)
+
+            return corrected
+        except Exception as e:
+            logger.error(f"Gamma校正失败: {str(e)}")
+            return image
+
+    def auto_contrast(self, image: np.ndarray, cutoff: float = 0.0) -> np.ndarray:
+        """
+        自动对比度
+
+        Args:
+            image: 输入图像
+            cutoff: 直方图截断百分比
+
+        Returns:
+            处理后的图像
+        """
+        try:
+            from PIL import Image as PILImage, ImageEnhance
+
+            # 转换为PIL图像
+            pil_image = PILImage.fromarray(image)
+
+            # 计算直方图
+            histogram = pil_image.histogram()
+
+            # 找到截断点
+            num_pixels = pil_image.width * pil_image.height
+            cut_pixels = int(num_pixels * cutoff / 100.0)
+
+            # 找到最小和最大值
+            min_level = 0
+            max_level = 255
+            count = 0
+            for i in range(256):
+                count += histogram[i]
+                if count > cut_pixels:
+                    min_level = i
+                    break
+
+            count = 0
+            for i in range(255, -1, -1):
+                count += histogram[i]
+                if count > cut_pixels:
+                    max_level = i
+                    break
+
+            if min_level >= max_level:
+                return image
+
+            # 应用线性拉伸
+            scale = 255.0 / (max_level - min_level)
+            offset = -min_level * scale
+
+            # 使用PIL进行对比度调整
+            enhancer = ImageEnhance.Contrast(pil_image)
+            # 这里简化处理，直接使用对比度增强
+            enhanced = enhancer.enhance(1.5)
+
+            return np.array(enhanced)
+        except Exception as e:
+            logger.error(f"自动对比度失败: {str(e)}")
+            return image
+
+    def add_salt_pepper_noise(self, image: np.ndarray, amount: float = 0.01) -> np.ndarray:
+        """
+        添加椒盐噪声
+
+        Args:
+            image: 输入图像
+            amount: 噪声密度
+
+        Returns:
+            添加噪声后的图像
+        """
+        try:
+            if amount <= 0:
+                return image
+
+            result = image.copy()
+            height, width = image.shape[:2]
+
+            # 计算噪声点数量
+            num_salt = int(amount * height * width * 0.5)
+            num_pepper = int(amount * height * width * 0.5)
+
+            # 添加盐噪声（白点）
+            salt_coords = [np.random.randint(0, i, num_salt) for i in (height, width)]
+            if len(result.shape) == 3:
+                result[salt_coords[0], salt_coords[1], :] = 255
+            else:
+                result[salt_coords[0], salt_coords[1]] = 255
+
+            # 添加椒噪声（黑点）
+            pepper_coords = [np.random.randint(0, i, num_pepper) for i in (height, width)]
+            if len(result.shape) == 3:
+                result[pepper_coords[0], pepper_coords[1], :] = 0
+            else:
+                result[pepper_coords[0], pepper_coords[1]] = 0
+
+            return result
+        except Exception as e:
+            logger.error(f"添加椒盐噪声失败: {str(e)}")
+            return image
+
+    def motion_blur(self, image: np.ndarray, kernel_size: int = 15,
+                     angle: float = 0.0) -> np.ndarray:
+        """
+        运动模糊
+
+        Args:
+            image: 输入图像
+            kernel_size: 核大小（必须是奇数）
+            angle: 运动角度
+
+        Returns:
+            模糊后的图像
+        """
+        try:
+            # 确保kernel_size是奇数
+            if kernel_size % 2 == 0:
+                kernel_size += 1
+            kernel_size = max(3, min(kernel_size, 51))
+
+            # 创建运动模糊核
+            kernel = np.zeros((kernel_size, kernel_size))
+            kernel[int((kernel_size - 1) / 2), :] = np.ones(kernel_size)
+            kernel = kernel / kernel_size
+
+            # 根据角度旋转核
+            if angle != 0:
+                center = (kernel_size - 1) / 2
+                rotation_matrix = cv2.getRotationMatrix2D((center, center), angle, 1)
+                kernel = cv2.warpAffine(kernel, rotation_matrix, (kernel_size, kernel_size))
+                kernel = kernel / np.sum(kernel)
+
+            # 应用模糊
+            blurred = cv2.filter2D(image, -1, kernel)
+
+            return blurred
+        except Exception as e:
+            logger.error(f"运动模糊失败: {str(e)}")
+            return image
+
+    def jpeg_compression(self, image: np.ndarray, quality: int = 85) -> np.ndarray:
+        """
+        JPEG压缩
+
+        Args:
+            image: 输入图像
+            quality: 压缩质量（1-100）
+
+        Returns:
+            压缩后的图像
+        """
+        try:
+            # 确保quality在合理范围
+            quality = max(10, min(100, quality))
+
+            # 转换为PIL图像
+            pil_image = Image.fromarray(image)
+
+            # 压缩再解压
+            buffer = io.BytesIO()
+            pil_image.save(buffer, format='JPEG', quality=quality)
+            buffer.seek(0)
+
+            recompressed = Image.open(buffer)
+            if recompressed.mode != 'RGB':
+                recompressed = recompressed.convert('RGB')
+
+            return np.array(recompressed)
+        except Exception as e:
+            logger.error(f"JPEG压缩失败: {str(e)}")
+            return image
+
     def image_array_to_bytes(self, image: np.ndarray, format: str = 'JPEG',
                            quality: int = 90) -> Optional[bytes]:
         """
@@ -611,6 +1014,156 @@ class ImageProcessor:
         except Exception as e:
             logger.error(f"图像转字节失败: {str(e)}")
             return None
+
+
+    def mosaic_augment(self, images: List[np.ndarray],
+                       scale = (0.5, 1.5)) -> np.ndarray:
+        """
+        马赛克增强：将4张图片拼接成1张
+
+        Args:
+            images: 图片列表，至少1张，不足4张会重复使用
+            scale: 缩放比例范围（元组或单个值）
+
+        Returns:
+            拼接后的图像
+        """
+        try:
+            if not images:
+                return None
+
+            # 如果图片不足4张，复制使用
+            if len(images) < 4:
+                images = images * (4 // len(images) + 1)
+                images = images[:4]
+
+            # 处理 scale 参数：支持单个值或元组
+            if isinstance(scale, (int, float)):
+                scale_val = max(0.1, min(float(scale), 3.0))
+                scale_range = (scale_val * 0.8, scale_val * 1.2)
+            else:
+                scale_range = scale
+
+            # 随机缩放每张图片
+            scaled_images = []
+            for img in images:
+                s = np.random.uniform(*scale_range)
+                h, w = img.shape[:2]
+                new_h, new_w = int(h * s), int(w * s)
+                scaled = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+                scaled_images.append(scaled)
+
+            # 计算拼接后的尺寸
+            # 上面两张：左上和右上
+            top_h = max(scaled_images[0].shape[0], scaled_images[1].shape[0])
+            top_w = scaled_images[0].shape[1] + scaled_images[1].shape[1]
+            # 下面两张：左下和右下
+            bottom_h = scaled_images[2].shape[0] + scaled_images[3].shape[0]
+            bottom_w = max(scaled_images[2].shape[1], scaled_images[3].shape[1])
+
+            # 创建画布
+            top_half = np.full((top_h, top_w, 3), 255, dtype=np.uint8)
+            bottom_half = np.full((bottom_h, bottom_w, 3), 255, dtype=np.uint8)
+
+            # 放置左上图片
+            h1, w1 = scaled_images[0].shape[:2]
+            top_half[:h1, :w1] = scaled_images[0]
+
+            # 放置右上图片
+            h2, w2 = scaled_images[1].shape[:2]
+            top_half[:h2, w1:w1+w2] = scaled_images[1]
+
+            # 放置左下图片
+            h3, w3 = scaled_images[2].shape[:2]
+            bottom_half[:h3, :w3] = scaled_images[2]
+
+            # 放置右下图片
+            h4, w4 = scaled_images[3].shape[:2]
+            bottom_half[h3:h3+h4, :w4] = scaled_images[3]
+
+            # 统一宽度后上下拼接
+            max_width = max(top_w, bottom_w)
+            if top_w < max_width:
+                padding = np.full((top_h, max_width - top_w, 3), 255, dtype=np.uint8)
+                top_half = np.hstack([top_half, padding])
+            if bottom_w < max_width:
+                padding = np.full((bottom_h, max_width - bottom_w, 3), 255, dtype=np.uint8)
+                bottom_half = np.hstack([bottom_half, padding])
+
+            # 上下拼接
+            result = np.vstack([top_half, bottom_half])
+
+            return result
+        except Exception as e:
+            logger.error(f"马赛克增强失败: {str(e)}")
+            return images[0] if images else None
+
+    def copy_paste_augment(self, target_image: np.ndarray,
+                           source_images: List[np.ndarray],
+                           max_objects: int = 5,
+                           annotations: Optional[List[Dict]] = None) -> Tuple[np.ndarray, Optional[List[Dict]]]:
+        """
+        Copy-Paste增强：从其他图像复制区域粘贴到当前图像
+
+        Args:
+            target_image: 目标图像
+            source_images: 源图像列表
+            max_objects: 最多粘贴的对象数量
+            annotations: 标注信息（可选）
+
+        Returns:
+            (增强后的图像, 更新后的标注)
+        """
+        try:
+            result = target_image.copy()
+            updated_annotations = annotations.copy() if annotations else None
+
+            if not source_images:
+                return result, updated_annotations
+
+            h, w = result.shape[:2]
+            num_pastes = min(len(source_images), max_objects)
+
+            for i in range(num_pastes):
+                source = source_images[i]
+                if source is None:
+                    continue
+                sh, sw = source.shape[:2]
+
+                # 随机选择粘贴区域大小（源图尺寸的1/4到全部）
+                paste_w = np.random.randint(sw // 4, sw)
+                paste_h = np.random.randint(sh // 4, sh)
+
+                # 确保不超过目标图尺寸
+                paste_w = min(paste_w, w // 3)
+                paste_h = min(paste_h, h // 3)
+
+                if paste_w <= 0 or paste_h <= 0:
+                    continue
+
+                # 随机选择源图像区域
+                sx = np.random.randint(0, max(1, sw - paste_w))
+                sy = np.random.randint(0, max(1, sh - paste_h))
+                patch = source[sy:sy+paste_h, sx:sx+paste_w]
+
+                # 随机选择目标位置
+                dx = np.random.randint(0, max(1, w - paste_w))
+                dy = np.random.randint(0, max(1, h - paste_h))
+
+                # 直接粘贴
+                result[dy:dy+paste_h, dx:dx+paste_w] = patch
+
+                # 更新标注（如果有）
+                if updated_annotations is not None:
+                    updated_annotations.append({
+                        'bbox': [dx, dy, paste_w, paste_h],
+                        'source': 'copy_paste'
+                    })
+
+            return result, updated_annotations
+        except Exception as e:
+            logger.error(f"Copy-Paste增强失败: {str(e)}")
+            return target_image, annotations
 
 
 # 创建全局实例

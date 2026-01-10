@@ -267,3 +267,75 @@ class FilterParams(BaseModel):
     size_filter: Optional[str] = None
     class_filter: Optional[List[str]] = None
     annotation_filter: Optional[bool] = None
+
+
+# ==================== 数据增强策略相关模式 ====================
+
+class AugmentationParamDef(BaseModel):
+    """增强算子参数定义"""
+    name: str
+    label_zh: str
+    label_en: str
+    type: str  # boolean, integer, float, range, select
+    default: Any
+    min_value: Optional[float] = None
+    max_value: Optional[float] = None
+    step: Optional[float] = None
+    options: Optional[List[Dict[str, Any]]] = None
+    description: str = ""
+
+
+class AugmentationOperatorSchema(BaseModel):
+    """增强算子模式"""
+    id: str
+    name_zh: str
+    name_en: str
+    category: str
+    category_label_zh: str
+    category_label_en: str
+    description: str
+    enabled: bool = True
+    params: List[AugmentationParamDef] = []
+
+
+class PipelineItem(BaseModel):
+    """流水线项目"""
+    instanceId: str
+    operatorId: str
+    enabled: bool = True
+    params: Dict[str, Any] = {}
+
+
+class AugmentationStrategyCreate(BaseModel):
+    """创建增强策略模式"""
+    name: str = Field(..., min_length=1, max_length=100, description="策略名称")
+    description: Optional[str] = Field(None, max_length=1000, description="策略描述")
+    pipeline: List[PipelineItem] = Field(default_factory=list, description="算子流水线")
+
+
+class AugmentationStrategyUpdate(BaseModel):
+    """更新增强策略模式"""
+    name: Optional[str] = Field(None, min_length=1, max_length=100, description="策略名称")
+    description: Optional[str] = Field(None, max_length=1000, description="策略描述")
+    pipeline: Optional[List[PipelineItem]] = Field(None, description="算子流水线")
+
+
+class AugmentationStrategyResponse(BaseModel):
+    """增强策略响应模式"""
+    id: int
+    user_id: int
+    name: str
+    description: Optional[str] = None
+    pipeline: List[PipelineItem] = []
+    is_default: bool = False
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class AugmentationStrategyList(BaseModel):
+    """增强策略列表响应模式"""
+    strategies: List[AugmentationStrategyResponse]
+    total: int

@@ -10,10 +10,12 @@ from contextlib import asynccontextmanager
 import uvicorn
 
 from app.core.config import settings
-from app.api.v1 import auth, datasets, models, training, inference, users, websocket, training_logs
+from app.api.v1 import auth, datasets, models, training, inference, users, websocket, training_logs, augmentation
 from app.core.exceptions import setup_exception_handlers
 from app.utils.metrics_collector import collector
 from app.api.websocket import manager
+from app.database import create_tables
+from app.models import User, Dataset, Model, TrainingRun, Checkpoint, InferenceJob, AugmentationStrategy
 
 
 @asynccontextmanager
@@ -23,6 +25,10 @@ async def lifespan(app: FastAPI):
     print(f"🚀 {settings.PROJECT_NAME} 正在启动...")
     print(f"📍 环境: {settings.ENVIRONMENT}")
     print(f"🌐 服务地址: http://{settings.HOST}:{settings.PORT}")
+
+    # 创建数据库表（如果不存在）
+    create_tables()
+    print("📊 数据库表已就绪")
 
     # 启动系统指标收集器
     async def metrics_callback(metrics):
@@ -125,6 +131,13 @@ def create_application() -> FastAPI:
         training_logs.router,
         prefix=f"{settings.API_V1_STR}/training",
         tags=["训练日志"]
+    )
+
+    # 数据增强API
+    app.include_router(
+        augmentation.router,
+        prefix=f"{settings.API_V1_STR}/augmentation",
+        tags=["数据增强"]
     )
 
     return app
