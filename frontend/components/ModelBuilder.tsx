@@ -94,24 +94,9 @@ interface ModelData {
   updated: string;
   nodes: VisualNode[];
   connections: Connection[];
+  filename?: string; // 服务器文件名（可选）
 }
 
-const DEFAULT_MODELS: ModelData[] = [
-  { 
-    id: 'm1', name: 'YOLOv8-Nano-Base', version: 'v1.0', status: 'Ready', type: 'Detection', updated: '2h ago',
-    nodes: [
-      { id: 'n1', type: 'Input', label: 'Input', x: 300, y: 50, inputs: [], outputs: [], data: { c: 3, h: 640, w: 640 } },
-      { id: 'n2', type: 'Conv2d', label: 'Conv2d', x: 300, y: 150, inputs: [], outputs: [], data: { in: 3, out: 16 } },
-      { id: 'n3', type: 'BatchNorm2d', label: 'BN2d', x: 300, y: 250, inputs: [], outputs: [], data: { num_f: 16 } },
-      { id: 'n4', type: 'SiLU', label: 'SiLU', x: 300, y: 350, inputs: [], outputs: [], data: {} },
-    ],
-    connections: [
-      { id: 'c1', source: 'n1', target: 'n2' },
-      { id: 'c2', source: 'n2', target: 'n3' },
-      { id: 'c3', source: 'n3', target: 'n4' },
-    ]
-  }
-];
 
 // --- Internal Reusable Dialog Component ---
 interface DialogProps {
@@ -186,16 +171,9 @@ const ModelBuilder: React.FC = () => {
   // Sub View for Architectures: 'list' or 'builder'
   const [archView, setArchView] = useState<'list' | 'builder'>('list');
 
-  // Model State with Persistence
-  const [models, setModels] = useState<ModelData[]>(() => {
-    try {
-      const saved = localStorage.getItem('neurocore_models');
-      if (saved) return JSON.parse(saved);
-      return DEFAULT_MODELS;
-    } catch {
-      return DEFAULT_MODELS;
-    }
-  });
+  // Model State - 从服务器加载
+  const [models, setModels] = useState<ModelData[]>([]);
+  const [isLoadingModels, setIsLoadingModels] = useState(false);
 
   // Weights State
   const [weights, setWeights] = useState<WeightCheckpoint[]>(INITIAL_WEIGHTS);
@@ -203,13 +181,49 @@ const ModelBuilder: React.FC = () => {
   // Generated Model Files State
   const [generatedFiles, setGeneratedFiles] = useState<Array<{filename: string, size: number, created: string}>>([]);
 
-  // Persist models whenever they change
+  // 从服务器加载架构列表
+  const loadServerArchitectures = async () => {
+    setIsLoadingModels(true);
+    try {
+      const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1'}/models/architectures`, {
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('access_token')}`,
+        },
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        // 将服务器架构转换为 ModelData 格式
+        const serverModels: ModelData[] = (data.architectures || []).map((arch: any) => ({
+          id: `server_${arch.filename}`,
+          name: arch.name,
+          version: arch.version,
+          status: 'Ready',
+          type: arch.type,
+          nodes: [], // 节点数据按需加载
+          connections: [], // 连接数据按需加载
+          updated: new Date(arch.updated).toLocaleDateString(),
+          filename: arch.filename, // 保存服务器文件名
+        }));
+        setModels(serverModels);
+      }
+    } catch (error) {
+      console.error('加载服务器架构列表失败:', error);
+      // 失败时使用默认列表
+      setModels([]);
+    } finally {
+      setIsLoadingModels(false);
+    }
+  };
+
+  // 组件挂载时从服务器加载架构列表
   useEffect(() => {
-    localStorage.setItem('neurocore_models', JSON.stringify(models));
-  }, [models]);
+    loadServerArchitectures();
+  }, []);
   
   // Builder State
-  const [activeModelId, setActiveModelId] = useState<string | null>(null); 
+  const [activeModelId, setActiveModelId] = useState<string | null>(null);
+  const [originalFilename, setOriginalFilename] = useState<string | null>(null); // 原始文件名（用于更新）
   const [modelName, setModelName] = useState('Untitled Architecture');
   const [isEditingName, setIsEditingName] = useState(false);
   const [nodes, setNodes] = useState<VisualNode[]>([]);
@@ -682,8 +696,8 @@ const ModelBuilder: React.FC = () => {
   };
 
   // --- ACTIONS ---
-  
-  const handleDeleteModel = (id: string, e: React.MouseEvent) => {
+
+  const handleDeleteModel = (id: string, filename: string, e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
     // Open Dialog instead of window.confirm
@@ -693,7 +707,7 @@ const ModelBuilder: React.FC = () => {
         title: '删除模型',
         message: '确定要删除该模型吗？此操作不可恢复。',
         action: 'delete_model',
-        data: id
+        data: { id, filename }  // 传递 id 和 filename
     });
   };
 
@@ -850,11 +864,35 @@ const ModelBuilder: React.FC = () => {
   };
 
   // --- UNIFIED DIALOG CONFIRM HANDLER ---
-  const handleDialogConfirm = (val?: string) => {
+  const handleDialogConfirm = async (val?: string) => {
       // 1. DELETE MODEL
       if (dialog.action === 'delete_model' && dialog.data) {
-          setModels(prev => prev.filter(m => m.id !== dialog.data));
-          showNotification("模型已删除", "success");
+          const { id, filename } = dialog.data;
+          // 如果有 filename，从服务器删除
+          if (filename) {
+              try {
+                  const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1'}/models/architectures/${filename}`, {
+                      method: 'DELETE',
+                      headers: {
+                          'Authorization': `Bearer ${localStorage.getItem('access_token')}`,
+                      },
+                  });
+                  if (response.ok) {
+                      showNotification("模型已删除", "success");
+                      await loadServerArchitectures();  // 刷新列表
+                  } else {
+                      const error = await response.json();
+                      showNotification(`删除失败: ${error.detail || '未知错误'}`, 'error');
+                  }
+              } catch (error) {
+                  console.error('删除模型失败:', error);
+                  showNotification('删除失败，请检查网络连接', 'error');
+              }
+          } else {
+              // 默认模型，只从前端状态移除
+              setModels(prev => prev.filter(m => m.id !== id));
+              showNotification("模型已删除", "success");
+          }
       }
       // 2. CLEAR CANVAS
       else if (dialog.action === 'clear_canvas') {
@@ -944,31 +982,181 @@ const ModelBuilder: React.FC = () => {
   };
 
   const handleCreateNew = () => {
-    setActiveModelId(null); setModelName("Untitled Architecture");
+    setActiveModelId(null); setOriginalFilename(null); setModelName("Untitled Architecture");
     setNodes([]); setConnections([]); setScale(1); setPan({ x: 0, y: 0 }); setArchView('builder');
   };
 
-  const handleEditModel = (model: ModelData) => {
+  const handleEditModel = async (model: ModelData) => {
+    // 保存原始文件名（用于保存时更新原文件）
+    setOriginalFilename(model.filename || null);
+
+    // 如果是服务器模型，从服务器获取完整数据
+    if (model.filename) {
+      try {
+        const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1'}/models/architectures/${model.filename}`, {
+          headers: {
+            'Authorization': `Bearer ${localStorage.getItem('access_token')}`,
+          },
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          setActiveModelId(model.id);
+          setModelName(data.name || model.name);
+          setNodes(data.nodes || []);
+          setConnections(data.connections || []);
+          setScale(1);
+          setPan({ x: 0, y: 0 });
+          setArchView('builder');
+          return;
+        }
+      } catch (error) {
+        console.error('加载架构详情失败:', error);
+      }
+    }
+
+    // 降级：使用本地数据
     setActiveModelId(model.id); setModelName(model.name);
     setNodes(JSON.parse(JSON.stringify(model.nodes || [])));
     setConnections(JSON.parse(JSON.stringify(model.connections || [])));
     setScale(1); setPan({ x: 0, y: 0 }); setArchView('builder');
   };
 
-  const handleSave = (asNew: boolean = false) => {
-    if (!modelName.trim()) { showNotification("模型名称不能为空", 'error'); return; }
-    const isDuplicate = models.some(m => m.name === modelName && (asNew || m.id !== activeModelId));
-    if (isDuplicate) { showNotification("已存在同名模型，请修改名称", 'error'); return; }
-    const currentData = { nodes, connections, updated: 'Just now', name: modelName, status: 'Draft', type: 'Custom', version: 'v0.1' };
-    if (activeModelId && !asNew) {
-        setModels(prev => prev.map(m => m.id === activeModelId ? { ...m, ...currentData } : m));
-        showNotification("模型已更新", 'success');
-    } else {
-        const newId = `m_${Date.now()}`;
-        setModels(prev => [{ ...currentData, id: newId }, ...prev]);
-        setActiveModelId(newId);
-        showNotification("新模型已保存", 'success');
+  const handleSave = async (asNew: boolean = false) => {
+    if (!modelName.trim()) {
+      showNotification("模型名称不能为空", 'error');
+      setIsEditingName(true);
+      return;
     }
+
+    try {
+      // 另存为时检查重名
+      if (asNew) {
+        const hasDuplicate = models.some(m => m.name === modelName);
+        if (hasDuplicate) {
+          showNotification(`已存在名为 "${modelName}" 的模型`, 'error');
+          return;
+        }
+      } else {
+        // 普通保存：也需要检查重名（排除当前正在编辑的模型）
+        const hasDuplicate = models.some(m => m.name === modelName && m.id !== activeModelId);
+        if (hasDuplicate) {
+          showNotification(`已存在名为 "${modelName}" 的模型`, 'error');
+          return;
+        }
+      }
+
+      const architecture = {
+        name: modelName,
+        description: '',
+        version: 'v1.0',
+        type: 'Custom',
+        nodes: nodes,
+        connections: connections
+      };
+
+      // 构建请求URL：另存为时不指定原文件名，后端根据name生成新文件
+      // 普通保存且有原文件名时，指定目标文件名更新原文件
+      let url = `${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1'}/models/architectures?overwrite=true`;
+      if (!asNew && originalFilename) {
+        url += `&target_filename=${encodeURIComponent(originalFilename)}`;
+      }
+
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('access_token')}`,
+        },
+        body: JSON.stringify(architecture)
+      });
+
+      if (response.ok) {
+        const result = await response.json();
+        const message = result.updated ? '模型已更新' : `已保存: ${result.filename}`;
+        showNotification(message, 'success');
+
+        // 更新原始文件名（后续保存会更新这个文件）
+        if (!asNew && !originalFilename) {
+          // 新建模型首次保存
+          setOriginalFilename(result.filename);
+        }
+
+        // 刷新服务器架构列表
+        await loadServerArchitectures();
+      } else {
+        const error = await response.json();
+        showNotification(`保存失败: ${error.detail || '未知错误'}`, 'error');
+      }
+    } catch (error: any) {
+      console.error('保存模型失败:', error);
+      showNotification('保存失败，请检查网络连接', 'error');
+    }
+  };
+
+  // 导出架构为 JSON 文件
+  const handleExportJSON = () => {
+    if (!modelName.trim()) {
+      showNotification("请先输入模型名称", 'error');
+      return;
+    }
+
+    const data = {
+      name: modelName,
+      version: 'v1.0',
+      type: 'Custom',
+      description: '',
+      nodes: nodes,
+      connections: connections,
+      exportedAt: new Date().toISOString()
+    };
+
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${modelName.replace(/\s+/g, '_')}.json`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+
+    showNotification('架构已导出', 'success');
+  };
+
+  // 导入架构 JSON 文件
+  const handleImportJSON = () => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json';
+    input.onchange = async (e: any) => {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      try {
+        const text = await file.text();
+        const data = JSON.parse(text);
+
+        // 验证数据结构
+        if (!data.nodes || !Array.isArray(data.nodes)) {
+          showNotification('无效的架构文件：缺少 nodes 数据', 'error');
+          return;
+        }
+
+        // 加载架构
+        setModelName(data.name || file.name.replace('.json', ''));
+        setNodes(data.nodes);
+        setConnections(data.connections || []);
+        setScale(1);
+        setPan({ x: 0, y: 0 });
+
+        showNotification(`架构已导入: ${data.name || file.name}`, 'success');
+      } catch (error) {
+        console.error('导入失败:', error);
+        showNotification('导入失败：文件格式错误', 'error');
+      }
+    };
+    input.click();
   };
 
   const getNodeHeight = (node: VisualNode) => {
@@ -1181,16 +1369,18 @@ const ModelBuilder: React.FC = () => {
                             <h2 className="text-2xl font-bold text-white mb-2">模型架构</h2>
                             <p className="text-slate-400 text-sm">管理神经网络拓扑结构与计算图。</p>
                         </div>
-                        <button onClick={handleCreateNew} className="px-6 py-2 bg-cyan-600 hover:bg-cyan-500 text-white font-bold rounded-xl shadow-lg shadow-cyan-900/20 flex items-center transition-all">
-                            <Plus size={18} className="mr-2" /> 新建架构
-                        </button>
+                        <div className="flex gap-3">
+                            <button onClick={handleCreateNew} className="px-6 py-2 bg-cyan-600 hover:bg-cyan-500 text-white font-bold rounded-xl shadow-lg shadow-cyan-900/20 flex items-center transition-all">
+                                <Plus size={18} className="mr-2" /> 新建架构
+                            </button>
+                        </div>
                     </div>
                     
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
                         {models.map(model => (
                         <div key={model.id} onClick={() => handleEditModel(model)} className="glass-panel p-5 rounded-xl border border-slate-800 hover:border-cyan-500/50 hover:bg-slate-900/80 transition-all group flex flex-col cursor-pointer relative overflow-hidden">
-                            <button 
-                                onClick={(e) => handleDeleteModel(model.id, e)} 
+                            <button
+                                onClick={(e) => handleDeleteModel(model.id, model.filename || '', e)}
                                 className="absolute top-4 right-4 p-2 text-slate-500 hover:text-rose-400 bg-slate-900/50 hover:bg-slate-900 rounded-full transition-all z-20 opacity-0 group-hover:opacity-100"
                                 title="删除模型"
                             >
@@ -1238,7 +1428,7 @@ const ModelBuilder: React.FC = () => {
                     {/* Top Bar (Canvas specific) */}
                     <div className="h-14 border-b border-slate-800 bg-slate-900/50 flex items-center justify-between px-6 shrink-0 z-20">
                         <div className="flex items-center space-x-4">
-                        <button onClick={() => setArchView('list')} className="text-slate-500 hover:text-white"><ArrowRight size={20} className="rotate-180" /></button>
+                        <button onClick={() => { setArchView('list'); loadServerArchitectures(); }} className="text-slate-500 hover:text-white"><ArrowRight size={20} className="rotate-180" /></button>
                         <div className="h-6 w-px bg-slate-800"></div>
                         <div className="flex items-center group">
                             <Layers className="mr-2 text-cyan-400" size={20} /> 
@@ -1262,7 +1452,10 @@ const ModelBuilder: React.FC = () => {
                         <div className="flex space-x-2">
                             <button onClick={handleSaveAsBlockClick} className="flex items-center px-3 py-1.5 bg-slate-800 hover:bg-indigo-600/20 hover:text-indigo-400 hover:border-indigo-500/50 text-slate-300 text-xs font-bold rounded border border-slate-600 transition-all"><Package size={14} className="mr-2" /> 存为算子</button>
                             <button onClick={() => handleSave(true)} className="flex items-center px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-xs font-bold rounded border border-slate-600 transition-all"><Copy size={14} className="mr-2" /> 另存为</button>
-                            <button onClick={() => handleSave(false)} className="flex items-center px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-xs font-bold rounded border border-slate-600 transition-all"><Save size={14} className="mr-2" /> 保存</button>
+                            <button onClick={() => handleSave(false)} className="flex items-center px-3 py-1.5 bg-slate-800 hover:bg-emerald-600/20 hover:text-emerald-400 hover:border-emerald-500/50 text-slate-300 text-xs font-bold rounded border border-slate-600 transition-all"><Save size={14} className="mr-2" /> 保存</button>
+                            <div className="w-px h-6 bg-slate-700 mx-1"></div>
+                            <button onClick={handleExportJSON} className="flex items-center px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-xs font-bold rounded border border-slate-600 transition-all" title="导出为JSON文件"><Download size={14} className="mr-1" /></button>
+                            <button onClick={handleImportJSON} className="flex items-center px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-xs font-bold rounded border border-slate-600 transition-all" title="导入JSON文件"><Upload size={14} className="mr-1" /></button>
                             <div className="w-px h-6 bg-slate-700 mx-1"></div>
                             <button
                                 onClick={handleGenerateCode}

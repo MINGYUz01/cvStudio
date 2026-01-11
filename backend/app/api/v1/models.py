@@ -595,3 +595,228 @@ async def save_code_to_library(request: dict):
             status_code=500,
             detail=f"保存代码失败: {str(e)}"
         )
+
+
+# ==============================
+# 模型架构管理端点
+# ==============================
+
+# 模型架构存储目录
+ARCHITECTURE_DIR = Path("data/architectures")
+ARCHITECTURE_DIR.mkdir(parents=True, exist_ok=True)
+
+
+class ArchitectureModel(BaseModel):
+    """模型架构数据模型"""
+    name: str = Field(..., description="架构名称")
+    description: str = Field("", description="架构描述")
+    version: str = Field("v1.0", description="版本号")
+    type: str = Field("Custom", description="架构类型")
+    nodes: List[Dict[str, Any]] = Field(default_factory=list, description="节点列表")
+    connections: List[Dict[str, str]] = Field(default_factory=list, description="连接列表")
+    thumbnail: Optional[str] = Field(None, description="缩略图（base64）")
+
+
+@router.post("/architectures")
+async def save_architecture(
+    architecture: ArchitectureModel,
+    overwrite: bool = Query(False, description="是否覆盖同名文件"),
+    target_filename: Optional[str] = Query(None, description="指定保存的目标文件名（用于更新原文件，不管名称是否改变）")
+):
+    """
+    保存模型架构到服务器
+
+    将模型架构数据保存为 JSON 文件到 data/architectures/ 目录。
+    - 如果指定了 target_filename，则保存到指定文件（更新原文件）
+    - 如果 overwrite=true，则覆盖同名文件；否则自动添加时间戳。
+    """
+    try:
+        import json
+
+        # 确定目标文件名
+        if target_filename:
+            # 使用指定的文件名（用于更新原文件）
+            filename = target_filename
+            filepath = ARCHITECTURE_DIR / filename
+        else:
+            # 根据架构名称生成文件名
+            safe_name = architecture.name.replace(" ", "_").replace("/", "_").replace("\\", "_")
+            filename = f"{safe_name}.json"
+            filepath = ARCHITECTURE_DIR / filename
+
+            # 如果文件已存在且不覆盖，添加时间戳
+            if filepath.exists() and not overwrite:
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                filename = f"{safe_name}_{timestamp}.json"
+                filepath = ARCHITECTURE_DIR / filename
+
+        # 检查文件是否已存在（用于判断是更新还是新建）
+        if filepath.exists():
+            # 覆盖模式：保留原有的创建时间
+            with open(filepath, "r", encoding="utf-8") as f:
+                old_data = json.load(f)
+                created = old_data.get("created", datetime.now().isoformat())
+
+            data = {
+                "name": architecture.name,
+                "description": architecture.description,
+                "version": architecture.version,
+                "type": architecture.type,
+                "created": created,
+                "updated": datetime.now().isoformat(),
+                "nodes": architecture.nodes,
+                "connections": architecture.connections,
+                "thumbnail": architecture.thumbnail
+            }
+
+            with open(filepath, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+
+            return {
+                "message": "架构已更新",
+                "filename": filename,
+                "filepath": str(filepath),
+                "updated": True
+            }
+
+        # 新建文件
+        data = {
+            "name": architecture.name,
+            "description": architecture.description,
+            "version": architecture.version,
+            "type": architecture.type,
+            "created": datetime.now().isoformat(),
+            "updated": datetime.now().isoformat(),
+            "nodes": architecture.nodes,
+            "connections": architecture.connections,
+            "thumbnail": architecture.thumbnail
+        }
+
+        # 写入文件
+        with open(filepath, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+
+        return {
+            "message": "架构已保存",
+            "filename": filename,
+            "filepath": str(filepath),
+            "updated": False
+        }
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"保存架构失败: {str(e)}"
+        )
+
+
+@router.get("/architectures")
+async def list_architectures():
+    """
+    获取已保存的模型架构列表
+
+    返回服务器上保存的所有模型架构信息。
+    """
+    try:
+        import json
+
+        architectures = []
+        if ARCHITECTURE_DIR.exists():
+            for filepath in ARCHITECTURE_DIR.glob("*.json"):
+                try:
+                    with open(filepath, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+
+                    stat = filepath.stat()
+                    architectures.append({
+                        "filename": filepath.name,
+                        "name": data.get("name", filepath.stem),
+                        "description": data.get("description", ""),
+                        "version": data.get("version", "v1.0"),
+                        "type": data.get("type", "Custom"),
+                        "node_count": len(data.get("nodes", [])),
+                        "connection_count": len(data.get("connections", [])),
+                        "created": data.get("created", datetime.fromtimestamp(stat.st_ctime).isoformat()),
+                        "updated": data.get("updated", datetime.fromtimestamp(stat.st_mtime).isoformat()),
+                        "size": stat.st_size
+                    })
+                except Exception as e:
+                    # 跳过损坏的文件
+                    continue
+
+        return {
+            "architectures": sorted(architectures, key=lambda x: x["updated"], reverse=True),
+            "total": len(architectures)
+        }
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"获取架构列表失败: {str(e)}"
+        )
+
+
+@router.get("/architectures/{filename}")
+async def get_architecture(filename: str):
+    """
+    获取模型架构的详细内容
+
+    根据文件名返回模型架构的完整数据。
+    """
+    try:
+        import json
+
+        # 安全检查：防止路径遍历攻击
+        if ".." in filename or "/" in filename or "\\" in filename:
+            raise HTTPException(400, "无效的文件名")
+
+        filepath = ARCHITECTURE_DIR / filename
+
+        if not filepath.exists():
+            raise HTTPException(404, "架构文件不存在")
+
+        with open(filepath, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        return {
+            "filename": filename,
+            **data
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"读取架构失败: {str(e)}"
+        )
+
+
+@router.delete("/architectures/{filename}")
+async def delete_architecture(filename: str):
+    """
+    删除模型架构
+
+    根据文件名删除服务器上的模型架构文件。
+    """
+    try:
+        # 安全检查：防止路径遍历攻击
+        if ".." in filename or "/" in filename or "\\" in filename:
+            raise HTTPException(400, "无效的文件名")
+
+        filepath = ARCHITECTURE_DIR / filename
+
+        if not filepath.exists():
+            raise HTTPException(404, "架构文件不存在")
+
+        filepath.unlink()
+
+        return {"message": "架构已删除", "filename": filename}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"删除架构失败: {str(e)}"
+        )
