@@ -51,6 +51,9 @@ class LayerBuilder:
     4. 生成语义化层命名（conv1, bn1, fc1等）
     """
 
+    # 不需要在__init__中定义的节点类型（纯forward操作）
+    FORWARD_ONLY_NODES = {"Add", "Concat"}
+
     # 层类型到PyTorch类的映射
     LAYER_TYPE_MAP = {
         "Conv2d": "nn.Conv2d",
@@ -63,6 +66,7 @@ class LayerBuilder:
         "MaxPool2d": "nn.MaxPool2d",
         "AvgPool2d": "nn.AvgPool2d",
         "AdaptiveAvgPool2d": "nn.AdaptiveAvgPool2d",
+        "AdaptiveAvg": "nn.AdaptiveAvgPool2d",  # AdaptiveAvgPool2d的别名
         "ReLU": "nn.ReLU",
         "ReLU6": "nn.ReLU6",
         "LeakyReLU": "nn.LeakyReLU",
@@ -114,6 +118,11 @@ class LayerBuilder:
         for node_id in layers:
             node = graph.nodes[node_id]
             shape_info = shape_map.get(node_id)
+
+            # 跳过纯forward操作节点（Add、Concat等）
+            if node.type in self.FORWARD_ONLY_NODES:
+                layer_names[node_id] = None  # 标记为无层定义
+                continue
 
             # 生成层名
             layer_name = self._generate_layer_name(node)
@@ -238,6 +247,7 @@ class LayerBuilder:
             "maxpool2d": "maxpool",
             "avgpool2d": "avgpool",
             "adaptiveavgpool2d": "adapool",
+            "adaptiveavg": "adapool",  # 别名
             "relu": "relu",
             "relu6": "relu6",
             "leakyrelu": "leaky_relu",
@@ -299,7 +309,7 @@ class LayerBuilder:
             return self._build_maxpool2d(params)
         elif node_type == "AvgPool2d":
             return self._build_avgpool2d(params)
-        elif node_type == "AdaptiveAvgPool2d":
+        elif node_type in {"AdaptiveAvgPool2d", "AdaptiveAvg"}:  # AdaptiveAvg是别名
             return self._build_adaptive_avgpool2d(params)
         elif node_type in ["ReLU", "LeakyReLU", "SiLU", "Sigmoid", "Softmax", "ReLU6", "Tanh", "GELU"]:
             return self._build_activation(node_type, params)

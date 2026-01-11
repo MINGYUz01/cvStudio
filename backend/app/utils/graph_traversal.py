@@ -98,6 +98,7 @@ SUPPORTED_LAYER_TYPES = {
     "MaxPool2d",
     "AvgPool2d",
     "AdaptiveAvgPool2d",
+    "AdaptiveAvg",  # AdaptiveAvgPool2d的别名（前端使用）
 
     # 全连接层
     "Linear",
@@ -625,7 +626,9 @@ def validate_type_compatibility(graph: Graph) -> List[str]:
         if node.type == "Linear":
             for pred_id in predecessors:
                 pred_node = graph.nodes[pred_id]
-                if pred_node.type not in ["Flatten", "Linear", "AdaptiveAvgPool2d", "LayerNorm", "Input"]:
+                # Dropout可以接在任何层之前，所以不检查Dropout
+                if pred_node.type not in ["Flatten", "Linear", "AdaptiveAvgPool2d", "AdaptiveAvg",
+                                           "LayerNorm", "Dropout", "DropPath", "Input"]:
                     errors.append(
                         f"{node_id}: Linear层应接Flatten或1D张量，当前接了{pred_node.type}。"
                         f"建议在Linear前添加Flatten层。"
@@ -708,6 +711,10 @@ def validate_parameter_ranges(graph: Graph) -> List[str]:
 
     for node_id, node in graph.nodes.items():
         for (layer_type, param_name), (min_val, max_val, inclusive) in range_rules.items():
+            # 首先检查节点类型是否匹配（修复：避免跨层类型的参数误判）
+            if node.type != layer_type:
+                continue
+
             # Linear层特殊处理：支持in/out、in_features/out_features、in_f/out_f
             if layer_type == "Linear" and param_name == "in":
                 value = node.params.get("in") or node.params.get("in_features") or node.params.get("in_f")

@@ -271,18 +271,34 @@ class ShapeCalculator:
         """
         Concat形状计算
         在指定维度上拼接多个张量
+
+        要求：除拼接维度外，其他维度必须相同
         """
+        if not input_shapes:
+            raise ValueError("Concat操作需要至少1个输入")
+
         dim = params.get("dim", params.get("axis", 1))
+
+        # 获取第一个输入的空间尺寸作为基准
+        ref_height = input_shapes[0].height
+        ref_width = input_shapes[0].width
+
+        # 验证所有输入的空间尺寸必须相同
+        for i, shape in enumerate(input_shapes[1:], 1):
+            if shape.height != ref_height or shape.width != ref_width:
+                raise ValueError(
+                    f"Concat操作的第{i+1}个输入空间尺寸({shape.height}x{shape.width})与第1个输入({ref_height}x{ref_width})不匹配。"
+                    f"Concat要求所有输入的空间尺寸必须相同。"
+                )
 
         # 假设在第1维（通道维）拼接
         if dim == 1:
             total_channels = sum(s.channels for s in input_shapes)
-            # 使用第一个输入的空间尺寸
             return TensorShape(
                 batch_size=input_shapes[0].batch_size,
                 channels=total_channels,
-                height=input_shapes[0].height,
-                width=input_shapes[0].width
+                height=ref_height,
+                width=ref_width
             )
         else:
             # 其他维度拼接（简化处理）
@@ -292,18 +308,29 @@ class ShapeCalculator:
     def add_shape(input_shapes: List[TensorShape], params: dict) -> TensorShape:
         """
         Add（残差连接）形状计算
-        要求所有输入形状相同，逐元素相加
+
+        要求所有输入的形状必须完全匹配才能进行相加操作。
+        如果通道数不匹配，需要在skip connection路径上添加1x1卷积来调整通道数。
         """
-        # 验证所有输入形状相同
+        if not input_shapes:
+            raise ValueError("Add操作需要至少1个输入")
+
         first_shape = input_shapes[0]
+
+        # 检查所有输入形状是否匹配
         for i, shape in enumerate(input_shapes[1:], 1):
-            if (shape.channels != first_shape.channels or
-                shape.height != first_shape.height or
-                shape.width != first_shape.width):
+            if shape.channels != first_shape.channels:
                 raise ValueError(
-                    f"Add操作要求所有输入形状相同，但输入{i}的形状不匹配"
+                    f"Add操作的第{i+1}个输入通道数({shape.channels})与第1个输入通道数({first_shape.channels})不匹配。"
+                    f"请确保所有Add输入的通道数相同，或在skip connection路径上添加1x1卷积来调整通道数。"
+                )
+            if shape.height != first_shape.height or shape.width != first_shape.width:
+                raise ValueError(
+                    f"Add操作的第{i+1}个输入空间尺寸({shape.height}x{shape.width})与第1个输入({first_shape.height}x{first_shape.width})不匹配。"
+                    f"请确保所有Add输入的空间尺寸相同。"
                 )
 
+        # 所有输入形状相同，返回该形状
         return TensorShape(
             batch_size=first_shape.batch_size,
             channels=first_shape.channels,
@@ -574,9 +601,9 @@ class ShapeInferenceEngine:
                 raise ValueError(f"节点 {node.id} ({node_type}) 缺少输入")
             return self.calculator.pool2d_shape(input_shapes[0], params, node_type[:3].lower())
 
-        elif node_type == "AdaptiveAvgPool2d":
+        elif node_type in {"AdaptiveAvgPool2d", "AdaptiveAvg"}:  # AdaptiveAvg是别名
             if not input_shapes:
-                raise ValueError(f"节点 {node.id} (AdaptiveAvgPool2d) 缺少输入")
+                raise ValueError(f"节点 {node.id} ({node_type}) 缺少输入")
             return self.calculator.adaptive_avgpool_shape(input_shapes[0], params)
 
         elif node_type == "Linear":

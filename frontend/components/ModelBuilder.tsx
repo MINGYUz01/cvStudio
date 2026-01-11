@@ -9,9 +9,8 @@ import {
 } from 'lucide-react';
 import { ModelNode, WeightCheckpoint } from '../types';
 import modelsAPI from '../src/services/models';
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from 'recharts';
+import CodePreviewModal from './CodePreviewModal';
 
 // 统计图表颜色
 const CHART_COLORS = ['#22d3ee', '#a855f7', '#f43f5e', '#fbbf24', '#34d399', '#60a5fa'];
@@ -244,6 +243,10 @@ const ModelBuilder: React.FC = () => {
   const [isGeneratingCode, setIsGeneratingCode] = useState(false);
   const [showCodePreview, setShowCodePreview] = useState(false);
   const [codeGenerationError, setCodeGenerationError] = useState<string | null>(null);
+  // 代码预览来源：'builder' 表示从构建器生成，'library' 表示从模型库打开
+  const [codePreviewSource, setCodePreviewSource] = useState<'builder' | 'library'>('builder');
+  // 当前预览的文件名（用于library模式下的删除操作）
+  const [currentPreviewFilename, setCurrentPreviewFilename] = useState<string | null>(null);
 
   // Node Expansion State (折叠式卡片)
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
@@ -386,6 +389,8 @@ const ModelBuilder: React.FC = () => {
         metadata.filename = '';
         metadata.validation_passed = result.validation?.valid !== false;
         setCodeMetadata(metadata);
+        setCodePreviewSource('builder');
+        setCurrentPreviewFilename(null);
         setShowCodePreview(true);
 
         // 根据验证状态显示不同的提示
@@ -606,6 +611,8 @@ const ModelBuilder: React.FC = () => {
         const metadata = parseMetadataFromCode(data.content);
         metadata.filename = filename;
         setCodeMetadata(metadata);
+        setCurrentPreviewFilename(filename);
+        setCodePreviewSource('library');
         setShowCodePreview(true);
       }
     } catch (error) {
@@ -693,6 +700,16 @@ const ModelBuilder: React.FC = () => {
     } catch (error) {
       showNotification("删除文件失败", "error");
     }
+  };
+
+  /**
+   * 删除当前预览的文件并关闭预览
+   */
+  const handleDeleteCurrentPreview = async () => {
+    if (!currentPreviewFilename) return;
+    await handleDeleteFile(currentPreviewFilename);
+    setShowCodePreview(false);
+    setCurrentPreviewFilename(null);
   };
 
   // --- ACTIONS ---
@@ -1898,222 +1915,19 @@ const ModelBuilder: React.FC = () => {
         </div>
 
         {/* Code Preview Modal */}
-        {showCodePreview && (
-            <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
-                <div className="bg-slate-900 border border-slate-700 rounded-xl w-full max-w-6xl h-[85vh] flex flex-col shadow-2xl animate-in fade-in zoom-in duration-200">
-                    {/* Header */}
-                    <div className="flex items-center justify-between px-6 py-4 border-b border-slate-800">
-                        <div className="flex items-center space-x-3">
-                            <div className="p-2 bg-emerald-900/30 rounded-lg">
-                                <FileText className="text-emerald-400" size={20} />
-                            </div>
-                            <div>
-                                <h3 className="text-lg font-bold text-white">生成的 PyTorch 模型代码</h3>
-                                {codeMetadata && (
-                                    <div className="flex items-center space-x-3 text-xs text-slate-400 mt-1">
-                                        <span>{codeMetadata.layer_count} 层</span>
-                                        <span>•</span>
-                                        <span>{codeMetadata.num_parameters?.toLocaleString()} 参数</span>
-                                        <span>•</span>
-                                        <span>深度 {codeMetadata.depth}</span>
-                                        {codeMetadata.validation_passed && (
-                                            <>
-                                                <span>•</span>
-                                                <span className="text-emerald-400">验证通过 ✓</span>
-                                            </>
-                                        )}
-                                    </div>
-                                )}
-                            </div>
-                        </div>
-                        <button
-                            onClick={() => setShowCodePreview(false)}
-                            className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition-colors"
-                        >
-                            <X size={20} />
-                        </button>
-                    </div>
-
-                    {/* 统计图表区域 */}
-                    {codeMetadata && (codeMetadata.layer_types || nodes.length > 0) && (
-                        <div className="px-6 py-4 border-b border-slate-800 bg-slate-900/30">
-                            <div className="grid grid-cols-2 gap-6">
-                                {/* 层类型分布饼图 */}
-                                <div className="flex items-center space-x-4">
-                                    <div className="flex-1">
-                                        <h4 className="text-xs text-slate-500 mb-2">层类型分布</h4>
-                                        <ResponsiveContainer width="100%" height={100}>
-                                            <PieChart>
-                                                <Pie
-                                                    data={Object.entries(
-                                                        codeMetadata.layer_types && Object.keys(codeMetadata.layer_types).length > 0
-                                                            ? codeMetadata.layer_types
-                                                            : nodes.reduce((acc, node) => {
-                                                                const category = ATOMIC_NODES[node.type]?.category || 'Other';
-                                                                acc[category] = (acc[category] || 0) + 1;
-                                                                return acc;
-                                                            }, {} as Record<string, number>)
-                                                    ).map(([name, value]) => ({ name, value }))}
-                                                    dataKey="value"
-                                                    nameKey="name"
-                                                    cx="50%"
-                                                    cy="50%"
-                                                    outerRadius={35}
-                                                    innerRadius={20}
-                                                    label={(entry) => entry.name}
-                                                    labelLine={false}
-                                                >
-                                                    {Object.entries(
-                                                        codeMetadata.layer_types && Object.keys(codeMetadata.layer_types).length > 0
-                                                            ? codeMetadata.layer_types
-                                                            : nodes.reduce((acc, node) => {
-                                                                const category = ATOMIC_NODES[node.type]?.category || 'Other';
-                                                                acc[category] = (acc[category] || 0) + 1;
-                                                                return acc;
-                                                            }, {} as Record<string, number>)
-                                                    ).map((entry, index) => (
-                                                        <Cell key={`cell-${index}`} fill={CHART_COLORS[index % CHART_COLORS.length]} />
-                                                    ))}
-                                                </Pie>
-                                                <Tooltip
-                                                    contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #334155', borderRadius: '8px' }}
-                                                    itemStyle={{ color: '#e2e8f0' }}
-                                                />
-                                            </PieChart>
-                                        </ResponsiveContainer>
-                                    </div>
-                                    {/* 图例 */}
-                                    <div className="w-32 space-y-1">
-                                        {Object.entries(
-                                            codeMetadata.layer_types && Object.keys(codeMetadata.layer_types).length > 0
-                                                ? codeMetadata.layer_types
-                                                : nodes.reduce((acc, node) => {
-                                                    const category = ATOMIC_NODES[node.type]?.category || 'Other';
-                                                    acc[category] = (acc[category] || 0) + 1;
-                                                    return acc;
-                                                }, {} as Record<string, number>)
-                                        ).map(([name, value], index) => (
-                                            <div key={name} className="flex items-center text-xs">
-                                                <div
-                                                    className="w-2 h-2 rounded-full mr-2"
-                                                    style={{ backgroundColor: CHART_COLORS[index % CHART_COLORS.length] }}
-                                                ></div>
-                                                <span className="text-slate-400">{name}: </span>
-                                                <span className="text-white ml-1">{value}</span>
-                                            </div>
-                                        ))}
-                                    </div>
-                                </div>
-
-                                {/* 参数统计 */}
-                                <div className="bg-slate-950 rounded-lg p-4">
-                                    <h4 className="text-xs text-slate-500 mb-3">模型统计</h4>
-                                    <div className="grid grid-cols-2 gap-4">
-                                        <div>
-                                            <div className="text-[10px] text-slate-500">总参数量</div>
-                                            <div className="text-lg font-bold text-cyan-400 font-mono">
-                                                {(codeMetadata.num_parameters || 0).toLocaleString()}
-                                            </div>
-                                        </div>
-                                        <div>
-                                            <div className="text-[10px] text-slate-500">网络深度</div>
-                                            <div className="text-lg font-bold text-purple-400 font-mono">
-                                                {codeMetadata.depth || 0}
-                                            </div>
-                                        </div>
-                                        <div>
-                                            <div className="text-[10px] text-slate-500">层数量</div>
-                                            <div className="text-lg font-bold text-emerald-400 font-mono">
-                                                {codeMetadata.layer_count || 0}
-                                            </div>
-                                        </div>
-                                        <div>
-                                            <div className="text-[10px] text-slate-500">验证状态</div>
-                                            <div className={`text-lg font-bold font-mono ${codeMetadata.validation_passed ? 'text-emerald-400' : 'text-amber-400'}`}>
-                                                {codeMetadata.validation_passed ? '通过 ✓' : '未通过'}
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    )}
-
-                    {/* Code Content with Syntax Highlighting */}
-                    <div className="flex-1 overflow-hidden">
-                        <SyntaxHighlighter
-                            language="python"
-                            style={vscDarkPlus}
-                            customStyle={{
-                                background: 'transparent',
-                                padding: '24px',
-                                margin: 0,
-                                height: '100%',
-                                fontSize: '13px'
-                            }}
-                            className="h-full overflow-auto custom-scrollbar"
-                            showLineNumbers
-                            lineNumberStyle={{ color: '#475569', fontSize: '12px' }}
-                        >
-                            {generatedCode || ''}
-                        </SyntaxHighlighter>
-                    </div>
-
-                    {/* Footer Actions */}
-                    <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 px-6 py-4 border-t border-slate-800 bg-slate-900/50">
-                        <div className="flex items-center space-x-2 min-w-0 flex-1">
-                            {codeGenerationError && (
-                                <div className="flex items-center text-amber-400 text-xs min-w-0">
-                                    <AlertTriangle size={14} className="mr-2 shrink-0" />
-                                    <span className="truncate" title={codeGenerationError}>
-                                        {codeGenerationError}
-                                    </span>
-                                </div>
-                            )}
-                        </div>
-                        <div className="flex items-center space-x-2 sm:space-x-3 shrink-0">
-                            <button
-                                onClick={handleCopyCode}
-                                className="flex items-center px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-sm font-medium rounded-lg border border-slate-700 transition-colors"
-                                title="复制到剪贴板"
-                            >
-                                <Copy size={16} className="mr-1.5" />
-                                <span className="hidden sm:inline">复制代码</span>
-                            </button>
-                            <button
-                                onClick={handleDownloadCode}
-                                className="flex items-center px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-sm font-medium rounded-lg border border-slate-700 transition-colors"
-                                title="下载到本地"
-                            >
-                                <Download size={16} className="mr-1.5" />
-                                <span className="hidden sm:inline">下载</span>
-                            </button>
-                            <button
-                                onClick={handleSaveToLibrary}
-                                disabled={!codeMetadata.validation_passed}
-                                className={`flex items-center px-3 py-2 text-white text-sm font-medium rounded-lg shadow-lg transition-colors ${
-                                    codeMetadata.validation_passed
-                                        ? 'bg-emerald-700 hover:bg-emerald-600 shadow-emerald-900/20'
-                                        : 'bg-rose-700 opacity-60 cursor-not-allowed shadow-rose-900/20'
-                                }`}
-                                title={codeMetadata.validation_passed ? "保存到服务器库" : "验证未通过，无法保存"}
-                            >
-                                <HardDrive size={16} className="mr-1.5" />
-                                <span className="hidden sm:inline">保存到库</span>
-                            </button>
-                            <button
-                                onClick={() => setShowCodePreview(false)}
-                                className="flex items-center px-3 py-2 bg-slate-700 hover:bg-slate-600 text-slate-300 text-sm font-medium rounded-lg border border-slate-600 transition-colors"
-                                title="关闭预览"
-                            >
-                                <X size={16} className="mr-1.5" />
-                                <span className="hidden sm:inline">关闭</span>
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        )}
+        <CodePreviewModal
+          show={showCodePreview}
+          code={generatedCode}
+          metadata={codeMetadata}
+          source={codePreviewSource}
+          modelName={modelName}
+          filename={currentPreviewFilename ?? undefined}
+          error={codeGenerationError}
+          onClose={() => setShowCodePreview(false)}
+          onSave={codePreviewSource === 'builder' ? handleSaveToLibrary : undefined}
+          onDelete={codePreviewSource === 'library' ? handleDeleteCurrentPreview : undefined}
+          showNotification={showNotification}
+        />
     </div>
   );
 };

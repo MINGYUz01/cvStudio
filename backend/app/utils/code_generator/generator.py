@@ -15,6 +15,8 @@ PyTorch代码生成引擎
 
 from typing import Dict, List, Any, Optional
 from datetime import datetime
+import keyword
+import re
 
 from app.utils.graph_traversal import Graph
 from app.utils.shape_inference import NodeShapeInfo, TensorShape
@@ -35,6 +37,89 @@ class CodeGenerator:
     5. 应用CodeOptimizer进行代码优化
     6. 生成元数据
     """
+
+    @staticmethod
+    def sanitize_model_name(name: str, original_name: str = None) -> tuple:
+        """
+        规范化模型名称，使其符合Python类名规范
+
+        规则：
+        1. 只保留字母、数字和下划线
+        2. 必须以字母或下划线开头
+        3. 不能是Python关键字
+        4. 使用驼峰命名法（PascalCase）
+
+        Args:
+            name: 原始模型名称
+            original_name: 原始名称（用于显示），如果为None则使用name
+
+        Returns:
+            (sanitized_name, display_name) 元组
+            - sanitized_name: 符合Python规范的类名
+            - display_name: 用于显示的原始名称
+
+        Examples:
+            "Mini-ResNet" -> ("MiniResNet", "Mini-ResNet")
+            "my_model" -> ("MyModel", "my_model")
+            "123model" -> ("Model123", "123model")
+            "class" -> ("ModelClass", "class")
+        """
+        if original_name is None:
+            original_name = name
+
+        # 如果名称已经是有效的Python类名，直接返回
+        if name.isidentifier() and not keyword.iskeyword(name):
+            # 检查首字母是否大写（PascalCase）
+            if name[0].isupper() or len(name) == 0:
+                return name, original_name
+
+        # 处理步骤：
+        # 1. 将特殊字符替换为空格（用于分割单词）
+        # 2. 将每个单词首字母大写
+        # 3. 合并单词
+
+        # 替换常见的分隔符为空格
+        normalized = re.sub(r'[-_\s+.]+', ' ', name)
+
+        # 移除开头的数字
+        if normalized and normalized[0].isdigit():
+            # 找到第一个字母的位置
+            match = re.search(r'[a-zA-Z]', normalized)
+            if match:
+                # 在字母前添加 Model 前缀
+                word_start = match.start()
+                prefix = normalized[word_start:]
+                normalized = f"Model {prefix}"
+            else:
+                normalized = "Model"
+
+        # 将每个单词首字母大写并合并
+        words = [w for w in normalized.split() if w]
+        if not words:
+            sanitized = "Model"
+        else:
+            # 每个单词首字母大写，其余小写
+            words = [w.capitalize() for w in words]
+            sanitized = ''.join(words)
+
+        # 确保不以数字开头
+        while sanitized and sanitized[0].isdigit():
+            sanitized = 'M' + sanitized
+
+        # 检查是否是Python关键字
+        if keyword.iskeyword(sanitized):
+            sanitized = "Model" + sanitized.capitalize()
+
+        # 确保首字母大写
+        if sanitized and sanitized[0].islower():
+            sanitized = sanitized.capitalize()
+
+        # 最终检查：必须是有效的标识符
+        if not sanitized.isidentifier():
+            # 如果仍然无效，使用默认名称
+            sanitized = "GeneratedModel"
+
+        return sanitized, original_name
 
     def __init__(
         self,
@@ -83,7 +168,8 @@ class CodeGenerator:
         Returns:
             {
                 "code": str,                    # 生成的完整代码
-                "model_class_name": str,        # 模型类名
+                "model_class_name": str,        # 模型类名（规范化后的）
+                "original_model_name": str,     # 原始模型名称
                 "init_method": str,             # __init__方法代码
                 "forward_method": str,          # forward方法代码
                 "layer_count": int,             # 层数量
@@ -92,6 +178,9 @@ class CodeGenerator:
                 "metadata": {...}               # 元数据
             }
         """
+        # 0. 规范化模型名称，使其符合Python类名规范
+        sanitized_name, original_name = self.sanitize_model_name(model_name)
+
         # 1. 构建__init__方法
         init_result = self.layer_builder.build_init_method(
             graph, execution_order, shape_map
@@ -108,7 +197,8 @@ class CodeGenerator:
 
         # 4. 组装完整代码
         full_code = self._assemble_full_code(
-            model_name=model_name,
+            model_name=sanitized_name,  # 使用规范化的名称
+            display_name=original_name,  # 传递原始名称用于显示
             imports=imports,
             init_method=init_result["code"],
             forward_method=forward_result["code"],
@@ -156,7 +246,7 @@ class CodeGenerator:
 
         validation = self.validator.validate_code(
             full_code,
-            model_name,
+            sanitized_name,  # 使用规范化的名称
             init_result["layer_defs"],
             forward_result["operations"],
             test_input_shape
@@ -172,7 +262,8 @@ class CodeGenerator:
 
         return {
             "code": full_code,
-            "model_class_name": model_name,
+            "model_class_name": sanitized_name,  # 规范化后的类名
+            "original_model_name": original_name,  # 原始名称
             "init_method": init_result["code"],
             "forward_method": forward_result["code"],
             "layer_count": len(execution_order["layers"]),
@@ -277,28 +368,33 @@ class CodeGenerator:
         forward_method: str,
         docstring: str,
         layer_defs: List[dict],
-        operations: List[dict]
+        operations: List[dict],
+        display_name: str = None
     ) -> str:
         """
         组装完整的模型类代码
 
         Args:
-            model_name: 模型类名
+            model_name: 模型类名（规范化的）
             imports: 导入语句列表
             init_method: __init__方法代码
             forward_method: forward方法代码
             docstring: 文档字符串
             layer_defs: 层定义列表
             operations: 操作列表
+            display_name: 用于显示的原始名称（可选）
 
         Returns:
             完整的代码字符串
         """
         lines = []
 
+        # 使用原始名称用于显示（如果提供）
+        name_for_display = display_name if display_name else model_name
+
         # 文件头注释
         lines.append('"""')
-        lines.append(f"{model_name} - 自动生成的PyTorch模型")
+        lines.append(f"{name_for_display} - 自动生成的PyTorch模型")
         lines.append("")
         lines.append(f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         lines.append('"""')
@@ -310,10 +406,10 @@ class CodeGenerator:
         lines.append("")
         lines.append("")
 
-        # 类定义
+        # 类定义（使用规范化的名称）
         lines.append(f"class {model_name}(nn.Module):")
         lines.append('    """')
-        lines.append(f'    {model_name} 模型')
+        lines.append(f'    {name_for_display} 模型')
         lines.append("")
         lines.append("    " + docstring.replace("\n", "\n    "))
         lines.append("")
@@ -334,7 +430,8 @@ class CodeGenerator:
         # 模型元数据
         lines.append("# 模型元数据")
         lines.append("MODEL_INFO = {")
-        lines.append(f'    "name": "{model_name}",')
+        lines.append(f'    "name": "{name_for_display}",')  # 使用原始名称
+        lines.append(f'    "class_name": "{model_name}",')   # 添加类名
         lines.append(f'    "layer_count": {len(layer_defs)},')
         lines.append(f'    "num_parameters": 0,  # 待计算')
         generation_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
