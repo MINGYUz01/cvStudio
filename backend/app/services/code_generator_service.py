@@ -61,13 +61,15 @@ class CodeGeneratorService:
             structure_result = analyze_graph_structure(graph_json)
 
             if not structure_result["validation"]["valid"]:
-                logger.error("图验证失败")
+                errors = structure_result["validation"]["errors"]
+                warnings = structure_result["validation"]["warnings"]
+                logger.error(f"图验证失败，错误: {errors}, 警告: {warnings}")
                 raise HTTPException(
                     status_code=400,
                     detail={
                         "message": "图结构验证失败",
-                        "errors": structure_result["validation"]["errors"],
-                        "warnings": structure_result["validation"]["warnings"]
+                        "errors": errors,
+                        "warnings": warnings
                     }
                 )
 
@@ -79,13 +81,15 @@ class CodeGeneratorService:
             )
 
             if not shape_result["validation"]["valid"]:
-                logger.error("形状推断失败")
+                errors = shape_result["validation"]["errors"]
+                warnings = shape_result["validation"]["warnings"]
+                logger.error(f"形状推断失败，错误: {errors}, 警告: {warnings}")
                 raise HTTPException(
                     status_code=400,
                     detail={
                         "message": "形状推断失败",
-                        "errors": shape_result["validation"]["errors"],
-                        "warnings": shape_result["validation"]["warnings"]
+                        "errors": errors,
+                        "warnings": warnings
                     }
                 )
 

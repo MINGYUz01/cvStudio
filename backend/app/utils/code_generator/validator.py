@@ -42,7 +42,8 @@ class CodeValidator:
         code: str,
         model_class_name: str,
         layer_defs: List[dict],
-        tensor_flow: List[dict]
+        tensor_flow: List[dict],
+        input_shape: tuple = None
     ) -> Dict[str, Any]:
         """
         综合验证生成的代码
@@ -52,6 +53,7 @@ class CodeValidator:
             model_class_name: 模型类名
             layer_defs: 层定义列表
             tensor_flow: 张量流动信息列表
+            input_shape: 输入张量形状（用于前向传播测试）
 
         Returns:
             {
@@ -101,7 +103,7 @@ class CodeValidator:
 
         if executable and TORCH_AVAILABLE:
             forward_success, test_results, forward_errors = \
-                self._test_forward_pass(code, model_class_name, tensor_flow)
+                self._test_forward_pass(code, model_class_name, tensor_flow, input_shape)
             if not forward_success:
                 errors.extend(forward_errors)
 

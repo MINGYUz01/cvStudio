@@ -6,19 +6,21 @@ PyTorch代码生成引擎
 2. 生成导入语句
 3. 组装完整的模型类代码
 4. 集成CodeValidator进行验证
-5. 生成元数据
+5. 应用CodeOptimizer进行代码优化
+6. 生成元数据
 
 作者: CV Studio 开发团队
 日期: 2025-12-25
 """
 
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 from datetime import datetime
 
 from app.utils.graph_traversal import Graph
 from app.utils.shape_inference import NodeShapeInfo, TensorShape
 from .layer_builder import LayerBuilder
 from .validator import CodeValidator
+from .optimizer import CodeOptimizer
 
 
 class CodeGenerator:
@@ -30,18 +32,37 @@ class CodeGenerator:
     2. 调用LayerBuilder构建层代码
     3. 组装完整的模型类代码
     4. 集成CodeValidator进行代码验证
-    5. 生成元数据
+    5. 应用CodeOptimizer进行代码优化
+    6. 生成元数据
     """
 
-    def __init__(self, template_dir: str = None):
+    def __init__(
+        self,
+        template_dir: str = None,
+        enable_optimization: bool = True,
+        optimization_level: str = "basic"
+    ):
         """
         初始化代码生成器
 
         Args:
             template_dir: 模板目录路径（暂时不使用，预留）
+            enable_optimization: 是否启用代码优化
+            optimization_level: 优化级别 ("basic", "aggressive")
         """
         self.layer_builder = LayerBuilder()
         self.validator = CodeValidator()
+        self.enable_optimization = enable_optimization
+        self.optimization_level = optimization_level
+
+        if enable_optimization:
+            enable_sequential = optimization_level == "aggressive"
+            self.optimizer = CodeOptimizer(
+                enable_sequential=enable_sequential,
+                enable_inline=True
+            )
+        else:
+            self.optimizer = None
 
     def generate(
         self,
@@ -98,19 +119,56 @@ class CodeGenerator:
             operations=forward_result["operations"]
         )
 
-        # 5. 验证生成的代码
+        # 5. 应用代码优化
+        optimization_info = None
+        if self.enable_optimization and self.optimizer:
+            optimization_result = self.optimizer.optimize(
+                code=full_code,
+                graph=graph,
+                layer_defs=init_result["layer_defs"],
+                operations=forward_result["operations"]
+            )
+            full_code = optimization_result["code"]
+            optimization_info = {
+                "applied": optimization_result["optimizations"],
+                "original_size": optimization_result["original_size"],
+                "optimized_size": optimization_result["optimized_size"]
+            }
+
+        # 6. 验证生成的代码
+        # 获取输入形状用于前向传播测试
+        input_nodes = execution_order["input_nodes"]
+        test_input_shape = None
+        if input_nodes and input_nodes[0] in shape_map:
+            input_shape_info = shape_map[input_nodes[0]].output_shape
+            # 将 TensorShape 转换为 tuple 格式: (batch, channels, height, width)
+            if input_shape_info.features is not None:
+                # 1D 张量: (batch, features)
+                test_input_shape = (1, input_shape_info.features)
+            else:
+                # 4D 张量: (batch, channels, height, width)
+                test_input_shape = (
+                    1,  # batch_size
+                    input_shape_info.channels,
+                    input_shape_info.height,
+                    input_shape_info.width
+                )
+
         validation = self.validator.validate_code(
             full_code,
             model_name,
             init_result["layer_defs"],
-            forward_result["operations"]
+            forward_result["operations"],
+            test_input_shape
         )
 
-        # 6. 生成元数据
+        # 7. 生成元数据
         metadata = self._generate_metadata(
             graph, execution_order, shape_map,
             init_result["layer_defs"], validation
         )
+        if optimization_info:
+            metadata["optimization"] = optimization_info
 
         return {
             "code": full_code,
@@ -146,13 +204,39 @@ class CodeGenerator:
 
         # 检查是否需要特殊导入
         layers = execution_order["layers"]
+        has_drop_path = False
+        has_multihead_attention = False
+
         for node_id in layers:
             node = graph.nodes[node_id]
 
-            # 检查是否使用了特殊功能
-            if node.type == "Dropout":
-                # Dropout已经在nn中，不需要额外导入
-                pass
+            if node.type == "DropPath":
+                has_drop_path = True
+            elif node.type == "MultiheadAttention":
+                has_multihead_attention = True
+
+        # 如果有DropPath，添加DropPath实现或timm导入
+        if has_drop_path:
+            imports.append("")
+            imports.append("# DropPath实现（随机路径深度）")
+            imports.append("class DropPath(nn.Module):")
+            imports.append("    \"\"\"Stochastic Depth正则化")
+            imports.append("")
+            imports.append("    来自: https://github.com/rwightman/pytorch-image-models")
+            imports.append("    \"\"\"")
+            imports.append("    def __init__(self, drop_prob: float = 0.):")
+            imports.append("        super().__init__()")
+            imports.append("        self.drop_prob = drop_prob")
+            imports.append("")
+            imports.append("    def forward(self, x):")
+            imports.append("        if self.drop_prob == 0. or not self.training:")
+            imports.append("            return x")
+            imports.append("        keep_prob = 1 - self.drop_prob")
+            imports.append("        shape = (x.shape[0],) + (1,) * (x.ndim - 1)")
+            imports.append("        random_tensor = keep_prob + torch.rand(shape, dtype=x.dtype, device=x.device)")
+            imports.append("        random_tensor.floor_()")
+            imports.append("        output = x.div(keep_prob) * random_tensor")
+            imports.append("        return output")
 
         return imports
 

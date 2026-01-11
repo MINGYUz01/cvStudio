@@ -54,21 +54,29 @@ class LayerBuilder:
     # 层类型到PyTorch类的映射
     LAYER_TYPE_MAP = {
         "Conv2d": "nn.Conv2d",
+        "ConvTranspose2d": "nn.ConvTranspose2d",
         "Linear": "nn.Linear",
         "BatchNorm2d": "nn.BatchNorm2d",
         "LayerNorm": "nn.LayerNorm",
+        "GroupNorm": "nn.GroupNorm",
+        "InstanceNorm2d": "nn.InstanceNorm2d",
         "MaxPool2d": "nn.MaxPool2d",
         "AvgPool2d": "nn.AvgPool2d",
         "AdaptiveAvgPool2d": "nn.AdaptiveAvgPool2d",
         "ReLU": "nn.ReLU",
+        "ReLU6": "nn.ReLU6",
         "LeakyReLU": "nn.LeakyReLU",
         "SiLU": "nn.SiLU",
         "Sigmoid": "nn.Sigmoid",
         "Softmax": "nn.Softmax",
+        "Tanh": "nn.Tanh",
+        "GELU": "nn.GELU",
         "Dropout": "nn.Dropout",
+        "DropPath": "DropPath",  # 需要自定义实现
         "Flatten": "nn.Flatten",
         "Upsample": "nn.Upsample",
         "Identity": "nn.Identity",
+        "MultiheadAttention": "nn.MultiheadAttention",
     }
 
     def __init__(self):
@@ -158,27 +166,26 @@ class LayerBuilder:
         forward_lines = []
         operations = []
         variables = {}
-        var_counter = 0
 
         for node_id in forward_order:
             node = graph.nodes[node_id]
 
-            # 跳过Input节点
+            # 跳过Input节点（输入参数x就是Input的输出）
             if node.type == "Input":
                 variables[node_id] = "x"
                 continue
 
-            # 生成变量名
-            var_name = f"x{var_counter}" if var_counter > 0 else "x"
-            var_counter += 1
-            variables[node_id] = var_name
-
-            # 获取输入变量
+            # 获取前驱节点
             predecessors = graph.get_predecessors(node_id)
 
             if len(predecessors) == 0:
                 # 异常情况：没有输入
                 continue
+
+            # 对于单输入节点，输出变量始终是 x
+            # 对于多输入节点（Concat、Add），输出变量也是 x
+            # variables 存储的是该节点的输出变量名
+            variables[node_id] = "x"
 
             # 生成操作语句
             operation = self._build_operation(
@@ -222,21 +229,29 @@ class LayerBuilder:
         # 命名映射
         name_map = {
             "conv2d": "conv",
+            "convtranspose2d": "convt",
             "linear": "fc",
             "batchnorm2d": "bn",
             "layernorm": "ln",
+            "groupnorm": "gn",
+            "instancenorm2d": "in",
             "maxpool2d": "maxpool",
             "avgpool2d": "avgpool",
             "adaptiveavgpool2d": "adapool",
             "relu": "relu",
+            "relu6": "relu6",
             "leakyrelu": "leaky_relu",
             "silu": "silu",
             "sigmoid": "sigmoid",
             "softmax": "softmax",
+            "tanh": "tanh",
+            "gelu": "gelu",
             "dropout": "dropout",
+            "droppath": "droppath",
             "flatten": "flatten",
             "upsample": "upsample",
             "identity": "identity",
+            "multiheadattention": "mha",
         }
 
         base_name = name_map.get(node_type.lower(), node_type.lower())
@@ -268,28 +283,38 @@ class LayerBuilder:
         # 根据层类型生成代码
         if node_type == "Conv2d":
             return self._build_conv2d(params, shape_info)
+        elif node_type == "ConvTranspose2d":
+            return self._build_conv_transpose2d(params, shape_info)
         elif node_type == "Linear":
             return self._build_linear(params, shape_info)
         elif node_type == "BatchNorm2d":
             return self._build_batchnorm2d(params, shape_info)
         elif node_type == "LayerNorm":
             return self._build_layer_norm(params, shape_info)
+        elif node_type == "GroupNorm":
+            return self._build_group_norm(params, shape_info)
+        elif node_type == "InstanceNorm2d":
+            return self._build_instance_norm2d(params, shape_info)
         elif node_type == "MaxPool2d":
             return self._build_maxpool2d(params)
         elif node_type == "AvgPool2d":
             return self._build_avgpool2d(params)
         elif node_type == "AdaptiveAvgPool2d":
             return self._build_adaptive_avgpool2d(params)
-        elif node_type in ["ReLU", "LeakyReLU", "SiLU", "Sigmoid", "Softmax"]:
+        elif node_type in ["ReLU", "LeakyReLU", "SiLU", "Sigmoid", "Softmax", "ReLU6", "Tanh", "GELU"]:
             return self._build_activation(node_type, params)
         elif node_type == "Dropout":
             return self._build_dropout(params)
+        elif node_type == "DropPath":
+            return self._build_drop_path(params)
         elif node_type == "Flatten":
             return self._build_flatten(params)
         elif node_type == "Upsample":
             return self._build_upsample(params)
         elif node_type == "Identity":
             return self._build_identity()
+        elif node_type == "MultiheadAttention":
+            return self._build_multihead_attention(params, shape_info)
         else:
             raise ValueError(f"不支持的层类型: {node_type}")
 
@@ -352,8 +377,8 @@ class LayerBuilder:
         示例输出：
         nn.Linear(512, 10)
         """
-        in_features = params.get("in", params.get("in_features", 0))
-        out_features = params.get("out", params.get("out_features", 1000))
+        in_features = params.get("in", params.get("in_features", params.get("in_f", 0)))
+        out_features = params.get("out", params.get("out_features", params.get("out_f", 1000)))
 
         # 如果有形状信息，优先使用形状推断的值
         if shape_info and shape_info.input_shape:
@@ -500,7 +525,7 @@ class LayerBuilder:
         """
         构建激活函数层定义
 
-        支持ReLU, LeakyReLU, SiLU, Sigmoid, Softmax
+        支持ReLU, ReLU6, LeakyReLU, SiLU, Sigmoid, Softmax, Tanh, GELU
         """
         layer_class = self.LAYER_TYPE_MAP[node_type]
         kwargs = {}
@@ -514,7 +539,13 @@ class LayerBuilder:
         elif node_type == "Softmax":
             dim = params.get("dim", 1)
             kwargs["dim"] = dim
+        elif node_type in ["ReLU6", "GELU", "Tanh"]:
+            # ReLU6, GELU, Tanh的inplace参数处理
+            inplace = params.get("inplace", False)
+            if inplace and node_type != "Tanh":
+                kwargs["inplace"] = inplace
         else:
+            # ReLU, SiLU, Sigmoid等
             inplace = params.get("inplace", True)
             if inplace:
                 kwargs["inplace"] = inplace
@@ -617,6 +648,180 @@ class LayerBuilder:
             description="Identity"
         )
 
+    def _build_conv_transpose2d(self, params: dict, shape_info: NodeShapeInfo) -> LayerDefinition:
+        """
+        构建ConvTranspose2d层定义（转置卷积/反卷积）
+
+        示例输出：
+        nn.ConvTranspose2d(64, 32, kernel_size=3, stride=2, padding=1, output_padding=1)
+        """
+        in_channels = params.get("in", params.get("in_channels", 64))
+        out_channels = params.get("out", params.get("out_channels", 32))
+        kernel_size = params.get("k", params.get("kernel_size", 3))
+        stride = params.get("s", params.get("stride", 1))
+        padding = params.get("p", params.get("padding", 0))
+        output_padding = params.get("output_padding", 0)
+
+        # 如果有形状信息，优先使用形状推断的值
+        if shape_info and shape_info.input_shape:
+            in_channels = shape_info.input_shape.channels
+        if shape_info and shape_info.output_shape:
+            out_channels = shape_info.output_shape.channels
+
+        # 构建参数列表
+        args = [str(in_channels), str(out_channels)]
+        kwargs = {"kernel_size": kernel_size}
+
+        if stride != 1:
+            kwargs["stride"] = stride
+        if padding != 0:
+            kwargs["padding"] = padding
+        if output_padding != 0:
+            kwargs["output_padding"] = output_padding
+
+        # 其他可选参数
+        if "dilation" in params:
+            kwargs["dilation"] = params["dilation"]
+        if "groups" in params:
+            kwargs["groups"] = params["groups"]
+
+        # 格式化代码
+        code = f"nn.ConvTranspose2d({', '.join(args)}"
+        if kwargs:
+            code += ", " + ", ".join(f"{k}={v}" for k, v in kwargs.items())
+        code += ")"
+
+        return LayerDefinition(
+            layer_type="ConvTranspose2d",
+            name="",
+            code=code,
+            params={"in_channels": in_channels, "out_channels": out_channels, **kwargs},
+            in_channels=in_channels,
+            out_channels=out_channels,
+            description=f"ConvTranspose2d: {in_channels}->{out_channels}, k={kernel_size}"
+        )
+
+    def _build_group_norm(self, params: dict, shape_info: NodeShapeInfo) -> LayerDefinition:
+        """
+        构建GroupNorm层定义
+
+        示例输出：
+        nn.GroupNorm(8, 64)
+        """
+        num_groups = params.get("num_groups", 8)
+        num_channels = params.get("num_channels", params.get("num_f", 64))
+
+        # 如果有形状信息，优先使用形状推断的值
+        if shape_info and shape_info.input_shape:
+            num_channels = shape_info.input_shape.channels
+
+        code = f"nn.GroupNorm({num_groups}, {num_channels})"
+
+        return LayerDefinition(
+            layer_type="GroupNorm",
+            name="",
+            code=code,
+            params={"num_groups": num_groups, "num_channels": num_channels},
+            in_channels=num_channels,
+            out_channels=num_channels,
+            description=f"GroupNorm: {num_groups} groups, {num_channels} channels"
+        )
+
+    def _build_instance_norm2d(self, params: dict, shape_info: NodeShapeInfo) -> LayerDefinition:
+        """
+        构建InstanceNorm2d层定义
+
+        示例输出：
+        nn.InstanceNorm2d(64)
+        """
+        num_features = params.get("num_features", params.get("num_f", 64))
+
+        # 如果有形状信息，优先使用形状推断的值
+        if shape_info and shape_info.input_shape:
+            num_features = shape_info.input_shape.channels
+
+        code = f"nn.InstanceNorm2d({num_features})"
+
+        return LayerDefinition(
+            layer_type="InstanceNorm2d",
+            name="",
+            code=code,
+            params={"num_features": num_features},
+            in_channels=num_features,
+            out_channels=num_features,
+            description=f"InstanceNorm2d: {num_features}"
+        )
+
+    def _build_drop_path(self, params: dict) -> LayerDefinition:
+        """
+        构建DropPath层定义（随机路径深度/Stochastic Depth）
+
+        注意：DropPath不是PyTorch原生层，需要自定义实现。
+        这里生成使用timm库的DropPath或提供自定义实现的注释。
+
+        示例输出：
+        DropPath(0.1)
+        """
+        drop_prob = params.get("p", params.get("drop_prob", 0.1))
+
+        code = f"DropPath({drop_prob})"
+
+        return LayerDefinition(
+            layer_type="DropPath",
+            name="",
+            code=code,
+            params={"drop_prob": drop_prob},
+            description=f"DropPath: {drop_prob}"
+        )
+
+    def _build_multihead_attention(self, params: dict, shape_info: NodeShapeInfo) -> LayerDefinition:
+        """
+        构建MultiheadAttention层定义
+
+        示例输出：
+        nn.MultiheadAttention(embed_dim=256, num_heads=8, batch_first=True)
+        """
+        embed_dim = params.get("embed_dim", 256)
+        num_heads = params.get("num_heads", 8)
+        dropout = params.get("dropout", 0.0)
+        bias = params.get("bias", True)
+        add_bias_kv = params.get("add_bias_kv", False)
+        kdim = params.get("kdim", None)
+        vdim = params.get("vdim", None)
+
+        # 如果有形状信息，优先使用形状推断的值
+        if shape_info and shape_info.input_shape:
+            if shape_info.input_shape.features:
+                embed_dim = shape_info.input_shape.features
+            elif shape_info.input_shape.channels:
+                embed_dim = shape_info.input_shape.channels
+
+        kwargs = {"embed_dim": embed_dim, "num_heads": num_heads, "batch_first": True}
+
+        if dropout != 0.0:
+            kwargs["dropout"] = dropout
+        if not bias:
+            kwargs["bias"] = bias
+        if add_bias_kv:
+            kwargs["add_bias_kv"] = add_bias_kv
+        if kdim:
+            kwargs["kdim"] = kdim
+        if vdim:
+            kwargs["vdim"] = vdim
+
+        # 格式化代码
+        code = "nn.MultiheadAttention("
+        code += ", ".join(f"{k}={v}" for k, v in kwargs.items())
+        code += ")"
+
+        return LayerDefinition(
+            layer_type="MultiheadAttention",
+            name="",
+            code=code,
+            params=kwargs,
+            description=f"MultiheadAttention: embed_dim={embed_dim}, heads={num_heads}"
+        )
+
     def _build_operation(
         self,
         node: Node,
@@ -681,8 +886,21 @@ class LayerBuilder:
         # 其他层：调用self.layer_name
         layer_name = layer_names.get(node.id)
 
+        # MultiheadAttention特殊处理（需要调用forward方法）
+        if node_type == "MultiheadAttention":
+            embed_dim = params.get("embed_dim", node.params.get("embed_dim", 256))
+            code = f"x, _ = self.{layer_name}({input_var}, {input_var}, {input_var})"
+            return Operation(
+                node_id=node.id,
+                node_type=node_type,
+                code=code,
+                comment=f"{node_type} (self-attention)",
+                input_vars=input_vars,
+                output_var="x"
+            )
+
         # 激活函数和Dropout可能是inplace的
-        if node_type in ["ReLU", "LeakyReLU", "SiLU", "Sigmoid", "Dropout"]:
+        if node_type in ["ReLU", "LeakyReLU", "SiLU", "Sigmoid", "Dropout", "ReLU6", "GELU"]:
             inplace = params.get("inplace", False)
             if inplace:
                 return Operation(
@@ -791,19 +1009,21 @@ class LayerBuilder:
             init_lines: 层定义代码行列表
 
         Returns:
-            格式化后的__init__方法代码
+            格式化后的__init__方法代码（带4空格缩进，用于类内部）
         """
         lines = []
-        lines.append("def __init__(self):")
-        lines.append("    \"\"\"")
-        lines.append("    初始化模型")
+        # 添加4个空格缩进，使方法成为类的一部分
+        lines.append("    def __init__(self):")
+        lines.append("        \"\"\"")
+        lines.append("        初始化模型")
         lines.append("")
-        lines.append("    定义所有层结构")
-        lines.append("    \"\"\"")
-        lines.append("    super(GeneratedModel, self).__init__()")
+        lines.append("        定义所有层结构")
+        lines.append("        \"\"\"")
+        # 使用现代Python 3语法，不需要硬编码类名
+        lines.append("        super().__init__()")
         lines.append("")
         for line in init_lines:
-            lines.append(f"    {line}")
+            lines.append(f"        {line}")
 
         return "\n".join(lines)
 
@@ -815,24 +1035,25 @@ class LayerBuilder:
             forward_lines: 操作代码行列表
 
         Returns:
-            格式化后的forward方法代码
+            格式化后的forward方法代码（带4空格缩进，用于类内部）
         """
         lines = []
-        lines.append("def forward(self, x):")
-        lines.append("    \"\"\"")
-        lines.append("    前向传播")
+        # 添加4个空格缩进，使方法成为类的一部分
+        lines.append("    def forward(self, x):")
+        lines.append("        \"\"\"")
+        lines.append("        前向传播")
         lines.append("")
-        lines.append("    Args:")
-        lines.append("        x: 输入张量")
+        lines.append("        Args:")
+        lines.append("            x: 输入张量")
         lines.append("")
-        lines.append("    Returns:")
-        lines.append("        输出张量")
-        lines.append("    \"\"\"")
+        lines.append("        Returns:")
+        lines.append("            输出张量")
+        lines.append("        \"\"\"")
         if forward_lines:
             lines.append("")
             for line in forward_lines:
-                lines.append(f"    {line}")
+                lines.append(f"        {line}")
             lines.append("")
-        lines.append("    return x")
+        lines.append("        return x")
 
         return "\n".join(lines)

@@ -7,6 +7,7 @@ PyTorch代码生成工具包
 - LayerBuilder: 构建层定义和forward方法
 - CodeValidator: 验证生成的代码
 - CodeGenerator: 协调整体代码生成流程
+- CodeOptimizer: 优化生成的代码
 - TemplateRenderer: Jinja2模板渲染
 
 作者: CV Studio 开发团队
@@ -14,11 +15,15 @@ PyTorch代码生成工具包
 """
 
 from .generator import CodeGenerator
-from .layer_builder import LayerBuilder
+from .layer_builder import LayerBuilder, LayerDefinition, Operation
 from .validator import CodeValidator
+from .optimizer import CodeOptimizer
 
 __all__ = [
     "CodeGenerator",
     "LayerBuilder",
     "CodeValidator",
+    "CodeOptimizer",
+    "LayerDefinition",
+    "Operation",
 ]

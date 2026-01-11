@@ -1,12 +1,20 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { 
-  Layers, ArrowRight, Save, Plus, GitBranch, 
+import {
+  Layers, ArrowRight, Save, Plus, GitBranch,
   Edit3, Trash2, ZoomIn, ZoomOut, Sidebar as SidebarIcon,
   CheckCircle, AlertTriangle, Code, Info, X, Copy,
   Layout, Package, Box, AlertOctagon, HelpCircle,
-  Database, HardDrive, Download, Upload, Tag
+  Database, HardDrive, Download, Upload, Tag,
+  Loader2, FileText
 } from 'lucide-react';
 import { ModelNode, WeightCheckpoint } from '../types';
+import modelsAPI from '../src/services/models';
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from 'recharts';
+
+// 统计图表颜色
+const CHART_COLORS = ['#22d3ee', '#a855f7', '#f43f5e', '#fbbf24', '#34d399', '#60a5fa'];
 
 // Constants for precise layout
 const NODE_WIDTH = 160;
@@ -19,34 +27,52 @@ const INITIAL_WEIGHTS: WeightCheckpoint[] = [
 ];
 
 // 1. ATOMIC OPERATORS
-const ATOMIC_NODES: Record<string, { label: string, color: string, category: string, params: { name: string, type: 'text'|'number'|'bool'|'select', default: any }[] }> = {
+const ATOMIC_NODES: Record<string, { label: string, color: string, category: string, params: { name: string, type: 'text'|'number'|'bool'|'select'|'dims4'|'dimsN', default: any, options?: string[] }[] }> = {
   // IO
   "Input": { label: "Input", color: "bg-slate-600", category: "IO", params: [{ name: "c", type: "number", default: 3 }, { name: "h", type: "number", default: 640 }, { name: "w", type: "number", default: 640 }] },
+
   // Layers
   "Conv2d": { label: "Conv2d", color: "bg-cyan-600", category: "Layer", params: [{ name: "in", type: "number", default: 3 }, { name: "out", type: "number", default: 64 }, { name: "k", type: "number", default: 3 }, { name: "s", type: "number", default: 1 }, { name: "p", type: "number", default: 1 }] },
+  "ConvTranspose2d": { label: "ConvT2d", color: "bg-cyan-600", category: "Layer", params: [{ name: "in", type: "number", default: 64 }, { name: "out", type: "number", default: 64 }, { name: "k", type: "number", default: 3 }, { name: "s", type: "number", default: 2 }, { name: "p", type: "number", default: 1 }, { name: "op", type: "number", default: 1 }] },
   "Linear": { label: "Linear", color: "bg-cyan-600", category: "Layer", params: [{ name: "in_f", type: "number", default: 512 }, { name: "out_f", type: "number", default: 10 }] },
   "BatchNorm2d": { label: "BN2d", color: "bg-cyan-700", category: "Layer", params: [{ name: "num_f", type: "number", default: 64 }] },
-  "LayerNorm": { label: "LayerNorm", color: "bg-cyan-700", category: "Layer", params: [{ name: "shape", type: "text", default: "[64]" }] },
+  "GroupNorm": { label: "GroupNorm", color: "bg-cyan-700", category: "Layer", params: [{ name: "groups", type: "number", default: 32 }, { name: "num_f", type: "number", default: 64 }] },
+  "InstanceNorm2d": { label: "InstanceNorm", color: "bg-cyan-700", category: "Layer", params: [{ name: "num_f", type: "number", default: 64 }, { name: "eps", type: "number", default: 1e-5 }] },
+  "LayerNorm": { label: "LayerNorm", color: "bg-cyan-700", category: "Layer", params: [{ name: "normalized_size", type: "number", default: 64 }, { name: "eps", type: "number", default: 1e-5 }] },
   "Dropout": { label: "Dropout", color: "bg-slate-500", category: "Layer", params: [{ name: "p", type: "number", default: 0.5 }] },
   "Flatten": { label: "Flatten", color: "bg-slate-500", category: "Layer", params: [] },
+
   // Activations
   "ReLU": { label: "ReLU", color: "bg-purple-600", category: "Activation", params: [{ name: "inplace", type: "bool", default: true }] },
+  "ReLU6": { label: "ReLU6", color: "bg-purple-600", category: "Activation", params: [{ name: "inplace", type: "bool", default: true }] },
   "LeakyReLU": { label: "LReLU", color: "bg-purple-600", category: "Activation", params: [{ name: "slope", type: "number", default: 0.01 }] },
+  "ELU": { label: "ELU", color: "bg-purple-600", category: "Activation", params: [{ name: "alpha", type: "number", default: 1.0 }] },
   "SiLU": { label: "SiLU", color: "bg-purple-600", category: "Activation", params: [] },
+  "Hardswish": { label: "HardSwish", color: "bg-purple-600", category: "Activation", params: [{ name: "inplace", type: "bool", default: true }] },
+  "Mish": { label: "Mish", color: "bg-purple-600", category: "Activation", params: [] },
+  "GELU": { label: "GELU", color: "bg-purple-600", category: "Activation", params: [] },
+  "Tanh": { label: "Tanh", color: "bg-purple-600", category: "Activation", params: [] },
   "Sigmoid": { label: "Sigmoid", color: "bg-purple-600", category: "Activation", params: [] },
   "Softmax": { label: "Softmax", color: "bg-purple-600", category: "Activation", params: [{ name: "dim", type: "number", default: 1 }] },
+
   // Pooling
   "MaxPool2d": { label: "MaxPool", color: "bg-rose-600", category: "Pooling", params: [{ name: "k", type: "number", default: 2 }, { name: "s", type: "number", default: 2 }] },
   "AvgPool2d": { label: "AvgPool", color: "bg-rose-600", category: "Pooling", params: [{ name: "k", type: "number", default: 2 }] },
   "AdaptiveAvg": { label: "AdaptAvg", color: "bg-rose-600", category: "Pooling", params: [{ name: "out", type: "number", default: 1 }] },
+  "AdaptiveMaxPool2d": { label: "AdaptMax", color: "bg-rose-600", category: "Pooling", params: [{ name: "out", type: "number", default: 1 }] },
+
   // Ops
   "Concat": { label: "Concat", color: "bg-amber-600", category: "Ops", params: [{ name: "dim", type: "number", default: 1 }] },
   "Add": { label: "Add", color: "bg-amber-600", category: "Ops", params: [] },
-  "Upsample": { label: "Upsample", color: "bg-amber-600", category: "Ops", params: [{ name: "scale", type: "number", default: 2 }, { name: "mode", type: "text", default: "nearest" }] },
+  "Upsample": { label: "Upsample", color: "bg-amber-600", category: "Ops", params: [{ name: "scale", type: "number", default: 2 }, { name: "mode", type: "select", default: "nearest", options: ["nearest", "bilinear", "bicubic"] }] },
   "Identity": { label: "Identity", color: "bg-slate-500", category: "Ops", params: [] },
-  // Heads
-  "YOLO Head": { label: "YOLO Head", color: "bg-blue-600", category: "Head", params: [{ name: "nc", type: "number", default: 80 }] },
-  "Classify Head": { label: "Cls Head", color: "bg-blue-600", category: "Head", params: [{ name: "nc", type: "number", default: 1000 }] },
+  "Pad2d": { label: "Pad2d", color: "bg-amber-600", category: "Ops", params: [{ name: "pad", type: "dims4", default: [1, 1, 1, 1] }, { name: "mode", type: "select", default: "constant", options: ["constant", "reflect", "replicate", "circular"] }] },
+  "Reshape": { label: "Reshape", color: "bg-amber-600", category: "Ops", params: [{ name: "shape", type: "dimsN", default: [-1, 64] }] },
+  "Permute": { label: "Permute", color: "bg-amber-600", category: "Ops", params: [{ name: "dims", type: "dimsN", default: [0, 2, 1] }] },
+  "ChannelShuffle": { label: "ChShuffle", color: "bg-amber-600", category: "Ops", params: [{ name: "groups", type: "number", default: 2 }] },
+  "Squeeze": { label: "Squeeze", color: "bg-amber-600", category: "Ops", params: [{ name: "dim", type: "number", default: 1 }] },
+  "Unsqueeze": { label: "Unsqueeze", color: "bg-amber-600", category: "Ops", params: [{ name: "dim", type: "number", default: 1 }] },
+  "PixelShuffle": { label: "PixelShuffle", color: "bg-amber-600", category: "Ops", params: [{ name: "scale", type: "number", default: 2 }] },
 };
 
 // 2. TEMPLATES (Structures)
@@ -108,7 +134,7 @@ const CustomDialog: React.FC<DialogProps> = ({ isOpen, type, title, message, def
     if (!isOpen) return null;
 
     return (
-        <div className="fixed inset-0 z-[150] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+        <div className="fixed inset-0 z-[300] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
             <div className="bg-slate-900 border border-slate-700 p-6 rounded-xl w-full max-w-sm shadow-2xl animate-in fade-in zoom-in duration-200" onClick={(e) => e.stopPropagation()}>
                 <div className="flex flex-col items-center text-center mb-6">
                     <div className={`w-12 h-12 rounded-full flex items-center justify-center mb-4 ${type === 'confirm' ? 'bg-rose-900/30 text-rose-500' : 'bg-cyan-900/30 text-cyan-500'}`}>
@@ -154,9 +180,9 @@ const CustomDialog: React.FC<DialogProps> = ({ isOpen, type, title, message, def
 
 
 const ModelBuilder: React.FC = () => {
-  // Main View State: 'architectures' or 'weights'
-  const [activeTab, setActiveTab] = useState<'architectures' | 'weights'>('architectures');
-  
+  // Main View State: 'architectures', 'weights', or 'generated'
+  const [activeTab, setActiveTab] = useState<'architectures' | 'weights' | 'generated'>('architectures');
+
   // Sub View for Architectures: 'list' or 'builder'
   const [archView, setArchView] = useState<'list' | 'builder'>('list');
 
@@ -173,6 +199,9 @@ const ModelBuilder: React.FC = () => {
 
   // Weights State
   const [weights, setWeights] = useState<WeightCheckpoint[]>(INITIAL_WEIGHTS);
+
+  // Generated Model Files State
+  const [generatedFiles, setGeneratedFiles] = useState<Array<{filename: string, size: number, created: string}>>([]);
 
   // Persist models whenever they change
   useEffect(() => {
@@ -194,7 +223,17 @@ const ModelBuilder: React.FC = () => {
   const [showRightPanel, setShowRightPanel] = useState(true);
   const [trashHover, setTrashHover] = useState(false);
   const [notification, setNotification] = useState<{msg: string, type: 'error' | 'success' | 'info'} | null>(null);
-  
+
+  // Code Generation State
+  const [generatedCode, setGeneratedCode] = useState<string | null>(null);
+  const [codeMetadata, setCodeMetadata] = useState<any>(null);
+  const [isGeneratingCode, setIsGeneratingCode] = useState(false);
+  const [showCodePreview, setShowCodePreview] = useState(false);
+  const [codeGenerationError, setCodeGenerationError] = useState<string | null>(null);
+
+  // Node Expansion State (折叠式卡片)
+  const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
+
   // Custom Dialog State
   const [dialog, setDialog] = useState<{
       isOpen: boolean;
@@ -258,6 +297,388 @@ const ModelBuilder: React.FC = () => {
   const showNotification = (msg: string, type: 'error' | 'success' | 'info') => {
     setNotification({ msg, type });
     setTimeout(() => setNotification(null), 3000);
+  };
+
+  // --- 加载生成的模型文件 ---
+  const loadGeneratedFiles = async () => {
+    try {
+      const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1'}/models/generated-files`, {
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('access_token')}`,
+        },
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setGeneratedFiles(data.files || []);
+      }
+    } catch (error) {
+      console.error('加载生成文件失败:', error);
+    }
+  };
+
+  // 切换到生成文件标签时加载文件列表
+  useEffect(() => {
+    if (activeTab === 'generated') {
+      loadGeneratedFiles();
+    }
+  }, [activeTab]);
+
+  // 切换节点展开状态
+  const toggleNodeExpand = (nodeId: string) => {
+    const newExpanded = new Set(expandedNodes);
+    if (newExpanded.has(nodeId)) {
+      newExpanded.delete(nodeId);
+    } else {
+      newExpanded.add(nodeId);
+    }
+    setExpandedNodes(newExpanded);
+  };
+
+  // --- CODE GENERATION ACTIONS ---
+
+  /**
+   * 生成PyTorch代码
+   */
+  const handleGenerateCode = async () => {
+    // 验证是否有节点
+    if (nodes.length === 0) {
+      showNotification("请先添加节点构建模型", "error");
+      return;
+    }
+
+    setIsGeneratingCode(true);
+    setCodeGenerationError(null);
+
+    try {
+      // 准备图数据
+      const graphData = {
+        nodes: nodes.map(n => ({
+          id: n.id,
+          type: n.type,
+          label: n.label,
+          data: n.data
+        })),
+        connections: connections
+      };
+
+      // 调用API生成代码
+      const result = await modelsAPI.generatePyTorchCode(graphData, modelName.replace(/\s+/g, '_'));
+
+      // 只要成功返回代码，就视为生成成功
+      if (result.code) {
+        setGeneratedCode(result.code);
+        // 解析层类型分布并添加到元数据
+        const metadata = parseMetadataFromCode(result.code);
+        metadata.filename = '';
+        metadata.validation_passed = result.validation?.valid !== false;
+        setCodeMetadata(metadata);
+        setShowCodePreview(true);
+
+        // 根据验证状态显示不同的提示
+        if (result.validation && !result.validation.valid && result.validation.errors?.length > 0) {
+          // 有验证错误，但代码已生成
+          setCodeGenerationError("代码已生成，但验证发现潜在问题: " + result.validation.errors.join(', '));
+          showNotification("代码已生成（有警告）", "info");
+        } else {
+          // 完全成功
+          setCodeGenerationError("");
+          showNotification("代码生成成功！", "success");
+        }
+      } else {
+        showNotification("代码生成失败", "error");
+      }
+    } catch (error: any) {
+      console.error('代码生成失败:', error);
+
+      // 解析详细的错误信息
+      let errorMsg = '未知错误';
+      let detailMsg = '';
+
+      if (error.detail) {
+        if (typeof error.detail === 'string') {
+          detailMsg = error.detail;
+        } else if (typeof error.detail === 'object') {
+          const detail = error.detail;
+          if (detail.message) {
+            detailMsg = detail.message;
+          }
+          if (detail.errors && detail.errors.length > 0) {
+            detailMsg += ': ' + detail.errors.join('; ');
+          }
+          if (detail.warnings && detail.warnings.length > 0) {
+            detailMsg += ' (警告: ' + detail.warnings.join('; ') + ')';
+          }
+        }
+      } else if (error.message) {
+        detailMsg = error.message;
+      }
+
+      // 根据错误类型提供更友好的提示
+      if (detailMsg.includes('形状推断失败')) {
+        errorMsg = '模型结构问题：无法推断张量形状。请检查节点连接是否正确。';
+      } else if (detailMsg.includes('图结构验证失败')) {
+        errorMsg = '模型验证失败：' + detailMsg;
+      } else if (detailMsg.includes('参数缺失')) {
+        errorMsg = '节点参数不完整：' + detailMsg;
+      } else if (detailMsg.includes('循环依赖')) {
+        errorMsg = '检测到循环依赖，请检查节点连接。';
+      } else {
+        errorMsg = detailMsg || '未知错误';
+      }
+
+      setCodeGenerationError(detailMsg || errorMsg);
+      showNotification("代码生成失败: " + errorMsg, "error");
+    } finally {
+      setIsGeneratingCode(false);
+    }
+  };
+
+  /**
+   * 下载生成的代码
+   */
+  const handleDownloadCode = () => {
+    if (!generatedCode) return;
+
+    const blob = new Blob([generatedCode], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${modelName.replace(/\s+/g, '_')}.py`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+
+    showNotification("代码已下载", "success");
+  };
+
+  /**
+   * 复制代码到剪贴板
+   */
+  const handleCopyCode = async () => {
+    if (!generatedCode) return;
+
+    try {
+      await navigator.clipboard.writeText(generatedCode);
+      showNotification("代码已复制到剪贴板", "success");
+    } catch (error) {
+      showNotification("复制失败，请手动复制", "error");
+    }
+  };
+
+  // --- 生成文件操作 ---
+  // PyTorch层类型到类别的映射
+  const LAYER_TYPE_TO_CATEGORY: Record<string, string> = {
+    // 卷积层
+    'Conv1d': 'Conv',
+    'Conv2d': 'Conv',
+    'Conv3d': 'Conv',
+    'ConvTranspose1d': 'Conv',
+    'ConvTranspose2d': 'Conv',
+    'ConvTranspose3d': 'Conv',
+    // 池化层
+    'MaxPool1d': 'Pool',
+    'MaxPool2d': 'Pool',
+    'MaxPool3d': 'Pool',
+    'AvgPool1d': 'Pool',
+    'AvgPool2d': 'Pool',
+    'AvgPool3d': 'Pool',
+    'AdaptiveAvgPool1d': 'Pool',
+    'AdaptiveAvgPool2d': 'Pool',
+    'AdaptiveAvgPool3d': 'Pool',
+    // 归一化层
+    'BatchNorm1d': 'Norm',
+    'BatchNorm2d': 'Norm',
+    'BatchNorm3d': 'Norm',
+    'GroupNorm': 'Norm',
+    'InstanceNorm1d': 'Norm',
+    'InstanceNorm2d': 'Norm',
+    'LayerNorm': 'Norm',
+    'Dropout': 'Dropout',
+    'DropPath': 'Dropout',
+    'Dropout2d': 'Dropout',
+    'Dropout3d': 'Dropout',
+    // 激活层
+    'ReLU': 'Activation',
+    'ReLU6': 'Activation',
+    'LeakyReLU': 'Activation',
+    'PReLU': 'Activation',
+    'RReLU': 'Activation',
+    'Sigmoid': 'Activation',
+    'Tanh': 'Activation',
+    'GELU': 'Activation',
+    'SiLU': 'Activation',
+    'Mish': 'Activation',
+    'Softmax': 'Activation',
+    'LogSoftmax': 'Activation',
+    // 线性层
+    'Linear': 'Linear',
+    'Flatten': 'Transform',
+    'View': 'Transform',
+    'Reshape': 'Transform',
+    'Transpose': 'Transform',
+    'Permute': 'Transform',
+    'Cat': 'Transform',
+    // 注意力层
+    'MultiheadAttention': 'Attention',
+    // 其他
+    'Sequential': 'Container',
+    'ModuleList': 'Container',
+    'ModuleDict': 'Container',
+  };
+
+  // 从代码中解析模型元数据
+  const parseMetadataFromCode = (code: string) => {
+    const metadata: any = {
+      filename: '',
+      layer_count: 0,
+      depth: 0,
+      num_parameters: 0,
+      validation_passed: true,
+      layer_types: {} as Record<string, number>  // 层类型分布
+    };
+
+    try {
+      // 尝试从代码中提取 MODEL_INFO
+      const modelInfoMatch = code.match(/MODEL_INFO\s*=\s*\{([^}]+)\}/s);
+      if (modelInfoMatch) {
+        const infoStr = modelInfoMatch[1];
+        const layerCountMatch = infoStr.match(/"layer_count":\s*(\d+)/);
+        const numParamsMatch = infoStr.match(/"num_parameters":\s*(\d+)/);
+        if (layerCountMatch) metadata.layer_count = parseInt(layerCountMatch[1]) || 0;
+        if (numParamsMatch) metadata.num_parameters = parseInt(numParamsMatch[1]) || 0;
+      }
+
+      // 计算深度和层类型分布（查找 nn. 开头的行）
+      const layerMatches = code.match(/self\.\w+\s*=\s*nn\.(\w+)/g);
+      if (layerMatches) {
+        metadata.layer_count = Math.max(metadata.layer_count, layerMatches.length);
+        metadata.depth = layerMatches.length;
+
+        // 解析每层的类型并归类
+        layerMatches.forEach(line => {
+          const match = line.match(/nn\.(\w+)/);
+          if (match) {
+            const layerType = match[1];
+            const category = LAYER_TYPE_TO_CATEGORY[layerType] || 'Other';
+            metadata.layer_types[category] = (metadata.layer_types[category] || 0) + 1;
+          }
+        });
+      }
+
+      // 尝试提取参数量（从注释中）
+      const paramCommentMatch = code.match(/# 参数数量[：:]\s*([\d,]+)/);
+      if (paramCommentMatch) {
+        metadata.num_parameters = parseInt(paramCommentMatch[1].replace(/,/g, '')) || metadata.num_parameters;
+      }
+    } catch (e) {
+      console.error('解析元数据失败:', e);
+    }
+
+    return metadata;
+  };
+
+  const handlePreviewFile = async (filename: string) => {
+    try {
+      const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1'}/models/generated-files/${filename}`, {
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('access_token')}`,
+        },
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setGeneratedCode(data.content);
+        // 从代码中解析元数据
+        const metadata = parseMetadataFromCode(data.content);
+        metadata.filename = filename;
+        setCodeMetadata(metadata);
+        setShowCodePreview(true);
+      }
+    } catch (error) {
+      showNotification("预览文件失败", "error");
+    }
+  };
+
+  const handleDownloadFile = async (filename: string) => {
+    try {
+      const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1'}/models/generated-files/${filename}`, {
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('access_token')}`,
+        },
+      });
+      if (response.ok) {
+        const data = await response.json();
+        const blob = new Blob([data.content], { type: 'text/plain' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        showNotification("文件已下载", "success");
+      }
+    } catch (error) {
+      showNotification("下载文件失败", "error");
+    }
+  };
+
+  /**
+   * 保存当前预览的代码到库
+   */
+  const handleSaveToLibrary = async () => {
+    if (!generatedCode) return;
+
+    try {
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+      const safeName = modelName.replace(/\s+/g, '_').replace(/[^\w\-]/g, '_');
+      const filename = `${safeName}_${timestamp}.py`;
+
+      // 调用后端保存接口（复用生成接口的保存逻辑）
+      const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1'}/models/save-code`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('access_token')}`,
+        },
+        body: JSON.stringify({
+          code: generatedCode,
+          filename: filename,
+          model_name: modelName
+        }),
+      });
+
+      if (response.ok) {
+        showNotification("代码已保存到库", "success");
+        // 刷新文件列表
+        if (activeTab === 'generated') {
+          loadGeneratedFiles();
+        }
+      } else {
+        throw new Error('保存失败');
+      }
+    } catch (error) {
+      console.error('保存代码失败:', error);
+      showNotification("保存到库失败", "error");
+    }
+  };
+
+  const handleDeleteFile = async (filename: string) => {
+    try {
+      const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1'}/models/generated-files/${filename}`, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('access_token')}`,
+        },
+      });
+      if (response.ok) {
+        loadGeneratedFiles();
+        showNotification("文件已删除", "success");
+      }
+    } catch (error) {
+      showNotification("删除文件失败", "error");
+    }
   };
 
   // --- ACTIONS ---
@@ -510,8 +931,13 @@ const ModelBuilder: React.FC = () => {
       }
       // 4. DELETE WEIGHT
       else if (dialog.action === 'delete_weight' && dialog.data) {
-          setWeights(prev => prev.filter(w => w.id !== dialog.data));
-          showNotification("权重文件已删除", "success");
+          // Check if it's a generated model file (string) or weight ID
+          if (typeof dialog.data === 'string' && dialog.data.endsWith('.py')) {
+              handleDeleteFile(dialog.data);
+          } else {
+              setWeights(prev => prev.filter(w => w.id !== dialog.data));
+              showNotification("权重文件已删除", "success");
+          }
       }
 
       setDialog({ ...dialog, isOpen: false });
@@ -548,8 +974,14 @@ const ModelBuilder: React.FC = () => {
   const getNodeHeight = (node: VisualNode) => {
     const def = ATOMIC_NODES[node.type] || { params: [] };
     const paramsCount = def.params.length;
-    const displayCount = Math.min(paramsCount, 4);
-    return 24 + Math.max(20, displayCount * 14 + 12);
+    const isExpanded = expandedNodes.has(node.id);
+    // 折叠式显示：默认只显示前2个参数，展开后显示全部
+    const displayCount = isExpanded ? paramsCount : Math.min(paramsCount, 2);
+    // 每个参数行约18px高度（包括间距）
+    const paramsHeight = displayCount * 18;
+    // 基础高度：头部24px + 内边距12px + 参数区域 + 底部padding
+    const baseHeight = 24 + 12 + paramsHeight + 8;
+    return Math.max(56, baseHeight);
   };
 
   const handleWheel = (e: React.WheelEvent) => { e.stopPropagation(); const delta = -e.deltaY * 0.001; setScale(s => Math.min(Math.max(0.2, s + delta), 3)); };
@@ -691,24 +1123,30 @@ const ModelBuilder: React.FC = () => {
         {/* TOP LEVEL NAVIGATION (Global within module) */}
         <div className="flex justify-center items-center py-4 shrink-0 bg-slate-900/80 backdrop-blur border-b border-slate-800 z-10">
             <div className="flex bg-slate-900 rounded-lg p-1 border border-slate-800">
-                <button 
-                    onClick={() => { setActiveTab('architectures'); if(archView === 'builder') setArchView('list'); }} // Reset to list when switching back
+                <button
+                    onClick={() => { setActiveTab('architectures'); if(archView === 'builder') setArchView('list'); }}
                     className={`px-4 py-2 rounded-md text-sm font-medium flex items-center transition-all ${activeTab === 'architectures' ? 'bg-slate-800 text-cyan-400 shadow-sm' : 'text-slate-400 hover:text-slate-200'}`}
                 >
                     <Layout size={16} className="mr-2" /> 架构设计
                 </button>
-                <button 
+                <button
                     onClick={() => setActiveTab('weights')}
                     className={`px-4 py-2 rounded-md text-sm font-medium flex items-center transition-all ${activeTab === 'weights' ? 'bg-slate-800 text-emerald-400 shadow-sm' : 'text-slate-400 hover:text-slate-200'}`}
                 >
                     <Database size={16} className="mr-2" /> 权重库
+                </button>
+                <button
+                    onClick={() => setActiveTab('generated')}
+                    className={`px-4 py-2 rounded-md text-sm font-medium flex items-center transition-all ${activeTab === 'generated' ? 'bg-slate-800 text-amber-400 shadow-sm' : 'text-slate-400 hover:text-slate-200'}`}
+                >
+                    <Code size={16} className="mr-2" /> 生成的模型
                 </button>
             </div>
         </div>
 
         {/* Global Notification */}
         {notification && (
-            <div className={`fixed top-6 left-1/2 -translate-x-1/2 z-[100] px-4 py-2 rounded-lg shadow-lg border flex items-center ${
+            <div className={`fixed top-6 left-1/2 -translate-x-1/2 z-[300] px-4 py-2 rounded-lg shadow-lg border flex items-center ${
                 notification.type === 'error' ? 'bg-rose-900/90 border-rose-500 text-white' : 
                 notification.type === 'success' ? 'bg-emerald-900/90 border-emerald-500 text-white' :
                 'bg-cyan-900/90 border-cyan-500 text-white'
@@ -824,7 +1262,29 @@ const ModelBuilder: React.FC = () => {
                         <div className="flex space-x-2">
                             <button onClick={handleSaveAsBlockClick} className="flex items-center px-3 py-1.5 bg-slate-800 hover:bg-indigo-600/20 hover:text-indigo-400 hover:border-indigo-500/50 text-slate-300 text-xs font-bold rounded border border-slate-600 transition-all"><Package size={14} className="mr-2" /> 存为算子</button>
                             <button onClick={() => handleSave(true)} className="flex items-center px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-xs font-bold rounded border border-slate-600 transition-all"><Copy size={14} className="mr-2" /> 另存为</button>
-                            <button onClick={() => handleSave(false)} className="flex items-center px-3 py-1.5 bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-bold rounded shadow-lg shadow-cyan-900/20 transition-all"><Save size={14} className="mr-2" /> 保存</button>
+                            <button onClick={() => handleSave(false)} className="flex items-center px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-xs font-bold rounded border border-slate-600 transition-all"><Save size={14} className="mr-2" /> 保存</button>
+                            <div className="w-px h-6 bg-slate-700 mx-1"></div>
+                            <button
+                                onClick={handleGenerateCode}
+                                disabled={isGeneratingCode || nodes.length === 0}
+                                className={`flex items-center px-3 py-1.5 text-xs font-bold rounded shadow-lg transition-all ${
+                                    isGeneratingCode || nodes.length === 0
+                                        ? 'bg-slate-800 text-slate-500 cursor-not-allowed'
+                                        : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-900/20'
+                                }`}
+                            >
+                                {isGeneratingCode ? (
+                                    <>
+                                        <Loader2 size={14} className="mr-2 animate-spin" />
+                                        生成中...
+                                    </>
+                                ) : (
+                                    <>
+                                        <Code size={14} className="mr-2" />
+                                        预览代码
+                                    </>
+                                )}
+                            </button>
                         </div>
                     </div>
 
@@ -836,7 +1296,7 @@ const ModelBuilder: React.FC = () => {
                                 <div>
                                     <div className="flex items-center mb-3 text-cyan-500"><Box size={14} className="mr-2" /><h3 className="text-xs font-bold uppercase tracking-wide">PyTorch 原子算子</h3></div>
                                     <div className="space-y-4 pl-2 border-l border-slate-800 ml-1.5">
-                                        {['Layer', 'Activation', 'Pooling', 'Ops', 'Head', 'IO'].map(cat => (
+                                        {['IO', 'Layer', 'Activation', 'Pooling', 'Ops'].map(cat => (
                                             <div key={cat}>
                                                 <h4 className="text-[10px] font-bold text-slate-600 uppercase mb-2">{cat}</h4>
                                                 <div className="space-y-1">
@@ -923,16 +1383,29 @@ const ModelBuilder: React.FC = () => {
                                     const nodeParams = ATOMIC_NODES[node.type]?.params || [];
 
                                     return (
-                                        <div key={node.id} style={{ left: node.x, top: node.y, width: NODE_WIDTH, height: nodeHeight }} onMouseDown={(e) => handleNodeMouseDown(e, node.id)} className={`absolute p-0 rounded-lg shadow-lg border-2 cursor-move group select-none flex flex-col ${selectedNodeId === node.id ? 'border-white z-20 shadow-[0_0_15px_rgba(34,211,238,0.2)]' : 'border-slate-800 z-10 bg-slate-900'} ${isConnected ? 'border-cyan-400 shadow-[0_0_15px_rgba(34,211,238,0.4)]' : ''} ${!movingNodeId ? 'transition-[top,left] duration-300 ease-in-out' : ''}`}>
-                                        <div className={`h-6 shrink-0 px-2 flex items-center justify-between rounded-t-sm ${def.color} bg-opacity-20`}><span className={`text-[10px] font-bold ${def.color.replace('bg-', 'text-')}`}>{def.label}</span></div>
-                                        <div className="flex-1 p-1.5 bg-slate-900/90 backdrop-blur rounded-b-sm overflow-hidden">
-                                            <div className="text-[9px] text-slate-500 font-mono space-y-0.5">
-                                                {nodeParams.slice(0, 4).map(param => (
-                                                    <div key={param.name} className="flex justify-between">
-                                                        <span className="text-slate-500">{param.name}:</span>
-                                                        <span className="text-slate-300 truncate ml-1">{String(node.data[param.name] ?? '')}</span>
-                                                    </div>
-                                                ))}
+                                        <div key={node.id} style={{ left: node.x, top: node.y, width: NODE_WIDTH, height: nodeHeight }} onMouseDown={(e) => handleNodeMouseDown(e, node.id)} onDoubleClick={(e) => { e.stopPropagation(); toggleNodeExpand(node.id); }} className={`absolute p-0 rounded-lg shadow-lg border-2 cursor-move group select-none flex flex-col ${selectedNodeId === node.id ? 'border-white z-20 shadow-[0_0_15px_rgba(34,211,238,0.2)]' : 'border-slate-800 z-10 bg-slate-900'} ${isConnected ? 'border-cyan-400 shadow-[0_0_15px_rgba(34,211,238,0.4)]' : ''} ${!movingNodeId ? 'transition-[top,left] duration-300 ease-in-out' : ''}`} title="双击展开/收起参数">
+                                        <div className={`h-6 shrink-0 px-2 flex items-center justify-between rounded-t-sm ${def.color} bg-opacity-20`}>
+                                            <span className={`text-[10px] font-bold ${def.color.replace('bg-', 'text-')}`}>{def.label}</span>
+                                            {!expandedNodes.has(node.id) && nodeParams.length > 2 && (
+                                                <span className="text-[9px] text-cyan-400/70 font-medium">
+                                                    +{nodeParams.length - 2}
+                                                </span>
+                                            )}
+                                        </div>
+                                        <div className="flex-1 p-2 bg-slate-900/90 backdrop-blur rounded-b-sm overflow-hidden">
+                                            <div className="text-[9px] text-slate-500 font-mono space-y-1">
+                                                {nodeParams.slice(0, expandedNodes.has(node.id) ? nodeParams.length : 2).map(param => {
+                                                    const value = node.data[param.name] ?? param.default;
+                                                    const displayValue = Array.isArray(value)
+                                                        ? `[${value.join(', ')}]`
+                                                        : String(value);
+                                                    return (
+                                                        <div key={param.name} className="flex justify-between items-center">
+                                                            <span className="text-slate-500 shrink-0">{param.name}:</span>
+                                                            <span className="text-slate-300 truncate ml-2 text-right" title={displayValue}>{displayValue}</span>
+                                                        </div>
+                                                    );
+                                                })}
                                             </div>
                                         </div>
                                         <div onMouseUp={(e) => handlePortMouseUp(e, node.id, 'in')} className="absolute left-1/2 -top-1.5 -ml-2 w-4 h-4 bg-slate-700 rounded-full border border-slate-500 hover:bg-cyan-400 cursor-crosshair z-50 flex items-center justify-center hover:scale-125 transition-transform" title="Input" onMouseDown={(e) => { e.stopPropagation(); e.preventDefault(); }}><div className="w-1.5 h-1.5 bg-white rounded-full opacity-50 pointer-events-none"></div></div>
@@ -949,11 +1422,106 @@ const ModelBuilder: React.FC = () => {
                                 {selectedNodeId ? (
                                     <div className="space-y-4">
                                         <div className="text-xs text-slate-500">ID: {selectedNodeId}</div>
-                                        {(ATOMIC_NODES[nodes.find(n => n.id === selectedNodeId)?.type || '']?.params || []).map(p => (
-                                        <div key={p.name} className="space-y-1"><label className="text-xs text-slate-500">{p.name}</label>
-                                        {p.type === 'bool' ? <input type="checkbox" defaultChecked={nodes.find(n => n.id === selectedNodeId)?.data[p.name]} className="accent-cyan-500" /> : <input className="w-full bg-slate-900 border border-slate-800 rounded px-2 py-1 text-xs text-white" defaultValue={nodes.find(n => n.id === selectedNodeId)?.data[p.name]} />}
-                                        </div>
-                                        ))}
+                                        {(ATOMIC_NODES[nodes.find(n => n.id === selectedNodeId)?.type || '']?.params || []).map(p => {
+                                            const nodeData = nodes.find(n => n.id === selectedNodeId)?.data || {};
+                                            const value = nodeData[p.name] ?? p.default;
+                                            return (
+                                                <div key={p.name} className="space-y-1">
+                                                    <label className="text-xs text-slate-500">{p.name}</label>
+                                                    {p.type === 'bool' ? (
+                                                        <div className="flex items-center justify-between bg-slate-900 border border-slate-800 rounded px-2 py-1">
+                                                            <span className="text-xs text-slate-400">{value ? '是' : '否'}</span>
+                                                            <input
+                                                                type="checkbox"
+                                                                checked={!!value}
+                                                                onChange={(e) => {
+                                                                    setNodes(nodes.map(n => n.id === selectedNodeId ? { ...n, data: { ...n.data, [p.name]: e.target.checked } } : n));
+                                                                }}
+                                                                className="accent-cyan-500 w-4 h-4"
+                                                            />
+                                                        </div>
+                                                    ) : p.type === 'select' ? (
+                                                        <select
+                                                            className="w-full bg-slate-900 border border-slate-800 rounded px-2 py-1 text-xs text-white"
+                                                            value={value}
+                                                            onChange={(e) => {
+                                                                setNodes(nodes.map(n => n.id === selectedNodeId ? { ...n, data: { ...n.data, [p.name]: e.target.value } } : n));
+                                                            }}
+                                                        >
+                                                            {p.options?.map(opt => (
+                                                                <option key={opt} value={opt}>{opt}</option>
+                                                            ))}
+                                                        </select>
+                                                    ) : p.type === 'dims4' ? (
+                                                        <div className="flex gap-1">
+                                                            {['左', '上', '右', '下'].map((label, i) => (
+                                                                <div key={i} className="flex-1">
+                                                                    <input
+                                                                        type="number"
+                                                                        className="w-full bg-slate-900 border border-slate-800 rounded px-2 py-1 text-xs text-white text-center"
+                                                                        value={Array.isArray(value) ? value[i] : 1}
+                                                                        onChange={(e) => {
+                                                                            const arr = Array.isArray(value) ? [...value] : [1, 1, 1, 1];
+                                                                            arr[i] = parseInt(e.target.value) || 0;
+                                                                            setNodes(nodes.map(n => n.id === selectedNodeId ? { ...n, data: { ...n.data, [p.name]: arr } } : n));
+                                                                        }}
+                                                                    />
+                                                                    <div className="text-[8px] text-slate-600 text-center">{label}</div>
+                                                                </div>
+                                                            ))}
+                                                        </div>
+                                                    ) : p.type === 'dimsN' ? (
+                                                        <div className="space-y-1">
+                                                            <div className="flex flex-wrap gap-1">
+                                                                {(Array.isArray(value) ? value : [0, 2, 1]).map((v, i) => (
+                                                                    <input
+                                                                        key={i}
+                                                                        type="number"
+                                                                        className="w-12 bg-slate-900 border border-slate-800 rounded px-2 py-1 text-xs text-white text-center"
+                                                                        value={v}
+                                                                        onChange={(e) => {
+                                                                            const arr = Array.isArray(value) ? [...value] : [];
+                                                                            arr[i] = parseInt(e.target.value) || 0;
+                                                                            setNodes(nodes.map(n => n.id === selectedNodeId ? { ...n, data: { ...n.data, [p.name]: arr } } : n));
+                                                                        }}
+                                                                    />
+                                                                ))}
+                                                            </div>
+                                                            <div className="flex gap-1">
+                                                                <button
+                                                                    className="flex-1 px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-400 text-xs rounded"
+                                                                    onClick={() => {
+                                                                        const arr = Array.isArray(value) ? [...value] : [];
+                                                                        arr.push(arr.length);
+                                                                        setNodes(nodes.map(n => n.id === selectedNodeId ? { ...n, data: { ...n.data, [p.name]: arr } } : n));
+                                                                    }}
+                                                                >+ 添加</button>
+                                                                {Array.isArray(value) && value.length > 1 && (
+                                                                    <button
+                                                                        className="flex-1 px-2 py-1 bg-slate-800 hover:bg-rose-900/50 text-slate-400 text-xs rounded"
+                                                                        onClick={() => {
+                                                                            const arr = [...(value as number[])];
+                                                                            arr.pop();
+                                                                            setNodes(nodes.map(n => n.id === selectedNodeId ? { ...n, data: { ...n.data, [p.name]: arr } } : n));
+                                                                        }}
+                                                                    >- 移除</button>
+                                                                )}
+                                                            </div>
+                                                        </div>
+                                                    ) : (
+                                                        <input
+                                                            className="w-full bg-slate-900 border border-slate-800 rounded px-2 py-1 text-xs text-white"
+                                                            type={p.type === 'number' ? 'number' : 'text'}
+                                                            value={value}
+                                                            onChange={(e) => {
+                                                                const val = p.type === 'number' ? parseFloat(e.target.value) : e.target.value;
+                                                                setNodes(nodes.map(n => n.id === selectedNodeId ? { ...n, data: { ...n.data, [p.name]: val } } : n));
+                                                            }}
+                                                        />
+                                                    )}
+                                                </div>
+                                            );
+                                        })}
                                         <button onClick={() => setNodes(nodes.filter(n => n.id !== selectedNodeId))} className="w-full py-2 bg-rose-900/20 text-rose-400 border border-rose-900 rounded text-xs mt-4">删除节点</button>
                                     </div>
                                 ) : <div className="text-xs text-slate-500">选择节点以编辑</div>}
@@ -1040,7 +1608,319 @@ const ModelBuilder: React.FC = () => {
                 </div>
             )}
 
+            {/* VIEW 4: GENERATED MODEL FILES */}
+            {activeTab === 'generated' && (
+                <div className="h-full flex flex-col p-8 pt-4 overflow-hidden">
+                    <div className="flex justify-between items-center mb-6 shrink-0">
+                        <div>
+                            <h2 className="text-2xl font-bold text-white mb-2">生成的模型</h2>
+                            <p className="text-slate-400 text-sm">通过模型构建器生成的 PyTorch 模型代码文件。</p>
+                        </div>
+                        <button
+                            onClick={loadGeneratedFiles}
+                            className="px-6 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold rounded-xl border border-slate-700 flex items-center transition-all"
+                        >
+                            <Loader2 size={18} className="mr-2" /> 刷新列表
+                        </button>
+                    </div>
+
+                    <div className="glass-panel rounded-xl border border-slate-800 overflow-hidden flex-1 overflow-y-auto custom-scrollbar">
+                        <table className="w-full text-left border-collapse">
+                            <thead className="bg-slate-900/80 backdrop-blur text-xs font-bold text-slate-500 uppercase tracking-wider">
+                                <tr>
+                                    <th className="p-4 border-b border-slate-800">文件名</th>
+                                    <th className="p-4 border-b border-slate-800">大小</th>
+                                    <th className="p-4 border-b border-slate-800">创建时间</th>
+                                    <th className="p-4 border-b border-slate-800 text-right">操作</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-800 text-sm">
+                                {generatedFiles.map((file) => (
+                                    <tr key={file.filename} className="hover:bg-slate-800/50 transition-colors group">
+                                        <td className="p-4">
+                                            <div className="flex items-center">
+                                                <div className="w-8 h-8 rounded bg-amber-900/20 text-amber-400 flex items-center justify-center mr-3">
+                                                    <FileText size={16} />
+                                                </div>
+                                                <div className="font-bold text-white group-hover:text-amber-400 transition-colors font-mono text-xs">
+                                                    {file.filename}
+                                                </div>
+                                            </div>
+                                        </td>
+                                        <td className="p-4 text-slate-400 font-mono text-xs">
+                                            {(file.size / 1024).toFixed(2)} KB
+                                        </td>
+                                        <td className="p-4 text-slate-500 text-xs">
+                                            {new Date(file.created).toLocaleString('zh-CN')}
+                                        </td>
+                                        <td className="p-4 text-right">
+                                            <div className="flex justify-end space-x-2">
+                                                <button
+                                                    onClick={() => handlePreviewFile(file.filename)}
+                                                    className="p-2 text-slate-500 hover:text-cyan-400 bg-slate-900/50 hover:bg-slate-900 rounded-lg transition-colors"
+                                                    title="预览代码"
+                                                >
+                                                    <FileText size={14} />
+                                                </button>
+                                                <button
+                                                    onClick={() => handleDownloadFile(file.filename)}
+                                                    className="p-2 text-slate-500 hover:text-emerald-400 bg-slate-900/50 hover:bg-slate-900 rounded-lg transition-colors"
+                                                    title="下载"
+                                                >
+                                                    <Download size={14} />
+                                                </button>
+                                                <button
+                                                    onClick={() => {
+                                                        setDialog({
+                                                            isOpen: true,
+                                                            type: 'confirm',
+                                                            title: '删除文件',
+                                                            message: `确定要删除 ${file.filename} 吗？`,
+                                                            action: 'delete_weight',
+                                                            data: file.filename
+                                                        });
+                                                    }}
+                                                    className="p-2 text-slate-500 hover:text-rose-400 bg-slate-900/50 hover:bg-slate-900 rounded-lg transition-colors"
+                                                    title="删除"
+                                                >
+                                                    <Trash2 size={14} />
+                                                </button>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                        {generatedFiles.length === 0 && (
+                            <div className="p-12 text-center text-slate-500">
+                                <Code size={48} className="mx-auto mb-4 opacity-20" />
+                                <p>暂无生成的模型文件</p>
+                                <p className="text-xs mt-2">请在"架构设计"中构建模型并点击"预览代码"</p>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            )}
+
         </div>
+
+        {/* Code Preview Modal */}
+        {showCodePreview && (
+            <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+                <div className="bg-slate-900 border border-slate-700 rounded-xl w-full max-w-6xl h-[85vh] flex flex-col shadow-2xl animate-in fade-in zoom-in duration-200">
+                    {/* Header */}
+                    <div className="flex items-center justify-between px-6 py-4 border-b border-slate-800">
+                        <div className="flex items-center space-x-3">
+                            <div className="p-2 bg-emerald-900/30 rounded-lg">
+                                <FileText className="text-emerald-400" size={20} />
+                            </div>
+                            <div>
+                                <h3 className="text-lg font-bold text-white">生成的 PyTorch 模型代码</h3>
+                                {codeMetadata && (
+                                    <div className="flex items-center space-x-3 text-xs text-slate-400 mt-1">
+                                        <span>{codeMetadata.layer_count} 层</span>
+                                        <span>•</span>
+                                        <span>{codeMetadata.num_parameters?.toLocaleString()} 参数</span>
+                                        <span>•</span>
+                                        <span>深度 {codeMetadata.depth}</span>
+                                        {codeMetadata.validation_passed && (
+                                            <>
+                                                <span>•</span>
+                                                <span className="text-emerald-400">验证通过 ✓</span>
+                                            </>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                        <button
+                            onClick={() => setShowCodePreview(false)}
+                            className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition-colors"
+                        >
+                            <X size={20} />
+                        </button>
+                    </div>
+
+                    {/* 统计图表区域 */}
+                    {codeMetadata && (codeMetadata.layer_types || nodes.length > 0) && (
+                        <div className="px-6 py-4 border-b border-slate-800 bg-slate-900/30">
+                            <div className="grid grid-cols-2 gap-6">
+                                {/* 层类型分布饼图 */}
+                                <div className="flex items-center space-x-4">
+                                    <div className="flex-1">
+                                        <h4 className="text-xs text-slate-500 mb-2">层类型分布</h4>
+                                        <ResponsiveContainer width="100%" height={100}>
+                                            <PieChart>
+                                                <Pie
+                                                    data={Object.entries(
+                                                        codeMetadata.layer_types && Object.keys(codeMetadata.layer_types).length > 0
+                                                            ? codeMetadata.layer_types
+                                                            : nodes.reduce((acc, node) => {
+                                                                const category = ATOMIC_NODES[node.type]?.category || 'Other';
+                                                                acc[category] = (acc[category] || 0) + 1;
+                                                                return acc;
+                                                            }, {} as Record<string, number>)
+                                                    ).map(([name, value]) => ({ name, value }))}
+                                                    dataKey="value"
+                                                    nameKey="name"
+                                                    cx="50%"
+                                                    cy="50%"
+                                                    outerRadius={35}
+                                                    innerRadius={20}
+                                                    label={(entry) => entry.name}
+                                                    labelLine={false}
+                                                >
+                                                    {Object.entries(
+                                                        codeMetadata.layer_types && Object.keys(codeMetadata.layer_types).length > 0
+                                                            ? codeMetadata.layer_types
+                                                            : nodes.reduce((acc, node) => {
+                                                                const category = ATOMIC_NODES[node.type]?.category || 'Other';
+                                                                acc[category] = (acc[category] || 0) + 1;
+                                                                return acc;
+                                                            }, {} as Record<string, number>)
+                                                    ).map((entry, index) => (
+                                                        <Cell key={`cell-${index}`} fill={CHART_COLORS[index % CHART_COLORS.length]} />
+                                                    ))}
+                                                </Pie>
+                                                <Tooltip
+                                                    contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #334155', borderRadius: '8px' }}
+                                                    itemStyle={{ color: '#e2e8f0' }}
+                                                />
+                                            </PieChart>
+                                        </ResponsiveContainer>
+                                    </div>
+                                    {/* 图例 */}
+                                    <div className="w-32 space-y-1">
+                                        {Object.entries(
+                                            codeMetadata.layer_types && Object.keys(codeMetadata.layer_types).length > 0
+                                                ? codeMetadata.layer_types
+                                                : nodes.reduce((acc, node) => {
+                                                    const category = ATOMIC_NODES[node.type]?.category || 'Other';
+                                                    acc[category] = (acc[category] || 0) + 1;
+                                                    return acc;
+                                                }, {} as Record<string, number>)
+                                        ).map(([name, value], index) => (
+                                            <div key={name} className="flex items-center text-xs">
+                                                <div
+                                                    className="w-2 h-2 rounded-full mr-2"
+                                                    style={{ backgroundColor: CHART_COLORS[index % CHART_COLORS.length] }}
+                                                ></div>
+                                                <span className="text-slate-400">{name}: </span>
+                                                <span className="text-white ml-1">{value}</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+
+                                {/* 参数统计 */}
+                                <div className="bg-slate-950 rounded-lg p-4">
+                                    <h4 className="text-xs text-slate-500 mb-3">模型统计</h4>
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div>
+                                            <div className="text-[10px] text-slate-500">总参数量</div>
+                                            <div className="text-lg font-bold text-cyan-400 font-mono">
+                                                {(codeMetadata.num_parameters || 0).toLocaleString()}
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <div className="text-[10px] text-slate-500">网络深度</div>
+                                            <div className="text-lg font-bold text-purple-400 font-mono">
+                                                {codeMetadata.depth || 0}
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <div className="text-[10px] text-slate-500">层数量</div>
+                                            <div className="text-lg font-bold text-emerald-400 font-mono">
+                                                {codeMetadata.layer_count || 0}
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <div className="text-[10px] text-slate-500">验证状态</div>
+                                            <div className={`text-lg font-bold font-mono ${codeMetadata.validation_passed ? 'text-emerald-400' : 'text-amber-400'}`}>
+                                                {codeMetadata.validation_passed ? '通过 ✓' : '未通过'}
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Code Content with Syntax Highlighting */}
+                    <div className="flex-1 overflow-hidden">
+                        <SyntaxHighlighter
+                            language="python"
+                            style={vscDarkPlus}
+                            customStyle={{
+                                background: 'transparent',
+                                padding: '24px',
+                                margin: 0,
+                                height: '100%',
+                                fontSize: '13px'
+                            }}
+                            className="h-full overflow-auto custom-scrollbar"
+                            showLineNumbers
+                            lineNumberStyle={{ color: '#475569', fontSize: '12px' }}
+                        >
+                            {generatedCode || ''}
+                        </SyntaxHighlighter>
+                    </div>
+
+                    {/* Footer Actions */}
+                    <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 px-6 py-4 border-t border-slate-800 bg-slate-900/50">
+                        <div className="flex items-center space-x-2 min-w-0 flex-1">
+                            {codeGenerationError && (
+                                <div className="flex items-center text-amber-400 text-xs min-w-0">
+                                    <AlertTriangle size={14} className="mr-2 shrink-0" />
+                                    <span className="truncate" title={codeGenerationError}>
+                                        {codeGenerationError}
+                                    </span>
+                                </div>
+                            )}
+                        </div>
+                        <div className="flex items-center space-x-2 sm:space-x-3 shrink-0">
+                            <button
+                                onClick={handleCopyCode}
+                                className="flex items-center px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-sm font-medium rounded-lg border border-slate-700 transition-colors"
+                                title="复制到剪贴板"
+                            >
+                                <Copy size={16} className="mr-1.5" />
+                                <span className="hidden sm:inline">复制代码</span>
+                            </button>
+                            <button
+                                onClick={handleDownloadCode}
+                                className="flex items-center px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-sm font-medium rounded-lg border border-slate-700 transition-colors"
+                                title="下载到本地"
+                            >
+                                <Download size={16} className="mr-1.5" />
+                                <span className="hidden sm:inline">下载</span>
+                            </button>
+                            <button
+                                onClick={handleSaveToLibrary}
+                                disabled={!codeMetadata.validation_passed}
+                                className={`flex items-center px-3 py-2 text-white text-sm font-medium rounded-lg shadow-lg transition-colors ${
+                                    codeMetadata.validation_passed
+                                        ? 'bg-emerald-700 hover:bg-emerald-600 shadow-emerald-900/20'
+                                        : 'bg-rose-700 opacity-60 cursor-not-allowed shadow-rose-900/20'
+                                }`}
+                                title={codeMetadata.validation_passed ? "保存到服务器库" : "验证未通过，无法保存"}
+                            >
+                                <HardDrive size={16} className="mr-1.5" />
+                                <span className="hidden sm:inline">保存到库</span>
+                            </button>
+                            <button
+                                onClick={() => setShowCodePreview(false)}
+                                className="flex items-center px-3 py-2 bg-slate-700 hover:bg-slate-600 text-slate-300 text-sm font-medium rounded-lg border border-slate-600 transition-colors"
+                                title="关闭预览"
+                            >
+                                <X size={16} className="mr-1.5" />
+                                <span className="hidden sm:inline">关闭</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        )}
     </div>
   );
 };

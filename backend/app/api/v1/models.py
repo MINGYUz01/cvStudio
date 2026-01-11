@@ -11,6 +11,8 @@
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 from typing import List, Dict, Optional, Any
+from pathlib import Path
+from datetime import datetime
 
 from app.utils.graph_traversal import analyze_graph_structure, Graph
 from app.utils.shape_inference import infer_shapes_from_graph
@@ -327,6 +329,10 @@ async def analyze_and_infer(graph: GraphModel):
 # 初始化代码生成服务
 code_generator_service = CodeGeneratorService()
 
+# 模型文件存储目录
+MODEL_DIR = Path("data/models")
+MODEL_DIR.mkdir(parents=True, exist_ok=True)
+
 
 @router.post("/generate", response_model=CodeGenerationResponse)
 async def generate_pytorch_code(
@@ -357,12 +363,15 @@ async def generate_pytorch_code(
         # 转换为字典格式
         graph_dict = graph.model_dump()
 
-        # 调用服务层生成代码
+        # 调用服务层生成代码（仅预览，不自动保存）
         result = await code_generator_service.generate_code(
             graph_json=graph_dict,
             model_name=model_name,
             template_tag=template_tag
         )
+
+        # 注意：生成的代码不会自动保存到服务器
+        # 用户需要点击"保存到库"按钮才会通过 /save-code 端点保存
 
         return CodeGenerationResponse(**result)
 
@@ -441,3 +450,148 @@ async def list_templates():
         "default_template": "base",
         "total_templates": 1
     }
+
+
+# ==============================
+# 生成的模型文件管理端点
+# ==============================
+
+@router.get("/generated-files")
+async def list_generated_files():
+    """
+    获取已生成的模型文件列表
+
+    返回服务器上保存的所有生成的模型文件信息。
+    """
+    try:
+        files = []
+        if MODEL_DIR.exists():
+            for filepath in MODEL_DIR.glob("*.py"):
+                stat = filepath.stat()
+                files.append({
+                    "filename": filepath.name,
+                    "size": stat.st_size,
+                    "created": datetime.fromtimestamp(stat.st_ctime).isoformat()
+                })
+
+        return {
+            "files": sorted(files, key=lambda x: x["created"], reverse=True),
+            "total": len(files)
+        }
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"获取文件列表失败: {str(e)}"
+        )
+
+
+@router.get("/generated-files/{filename}")
+async def get_generated_file(filename: str):
+    """
+    获取生成的模型文件内容
+
+    根据文件名返回模型文件的完整代码内容。
+    """
+    try:
+        # 安全检查：防止路径遍历攻击
+        if ".." in filename or "/" in filename or "\\" in filename:
+            raise HTTPException(400, "无效的文件名")
+
+        filepath = MODEL_DIR / filename
+
+        if not filepath.exists():
+            raise HTTPException(404, "文件不存在")
+
+        with open(filepath, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        return {
+            "filename": filename,
+            "content": content,
+            "size": filepath.stat().st_size
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"读取文件失败: {str(e)}"
+        )
+
+
+@router.delete("/generated-files/{filename}")
+async def delete_generated_file(filename: str):
+    """
+    删除生成的模型文件
+
+    根据文件名删除服务器上的模型文件。
+    """
+    try:
+        # 安全检查：防止路径遍历攻击
+        if ".." in filename or "/" in filename or "\\" in filename:
+            raise HTTPException(400, "无效的文件名")
+
+        filepath = MODEL_DIR / filename
+
+        if not filepath.exists():
+            raise HTTPException(404, "文件不存在")
+
+        filepath.unlink()
+
+        return {"message": "文件已删除", "filename": filename}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"删除文件失败: {str(e)}"
+        )
+
+
+@router.post("/save-code")
+async def save_code_to_library(request: dict):
+    """
+    直接保存代码到模型库
+
+    允许用户将预览的代码直接保存到服务器，无需重新生成。
+    """
+    try:
+        code = request.get("code")
+        filename = request.get("filename")
+        model_name = request.get("model_name", "Model")
+
+        if not code:
+            raise HTTPException(400, "代码内容不能为空")
+
+        # 如果没有提供文件名，自动生成
+        if not filename:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            safe_name = model_name.replace(" ", "_").replace("-", "_")
+            filename = f"{safe_name}_{timestamp}.py"
+
+        # 安全检查文件名
+        if ".." in filename or "/" in filename or "\\" in filename:
+            raise HTTPException(400, "无效的文件名")
+
+        filepath = MODEL_DIR / filename
+
+        # 写入文件
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write(code)
+
+        return {
+            "message": "代码已保存",
+            "filename": filename,
+            "filepath": str(filepath)
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"保存代码失败: {str(e)}"
+        )
