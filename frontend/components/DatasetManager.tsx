@@ -353,15 +353,66 @@ interface ViewDescriptionDialogProps {
   isOpen: boolean;
   onClose: () => void;
   datasetName: string;
+  datasetId: string;
   description?: string;
+  onSave?: (datasetId: string, newDescription: string) => void;
 }
 
 const ViewDescriptionDialog: React.FC<ViewDescriptionDialogProps> = ({
   isOpen,
   onClose,
   datasetName,
-  description
+  datasetId,
+  description,
+  onSave
 }) => {
+  const [isEditing, setIsEditing] = useState(false);
+  const [editedDescription, setEditedDescription] = useState(description || '');
+  const [displayDescription, setDisplayDescription] = useState(description || ''); // 用于显示的描述
+  const [isSaving, setIsSaving] = useState(false);
+
+  // 当弹窗打开或描述变化时，重置编辑状态
+  useEffect(() => {
+    if (isOpen) {
+      setIsEditing(false);
+      setEditedDescription(description || '');
+      setDisplayDescription(description || '');
+    }
+  }, [isOpen, description]);
+
+  // 当 prop description 变化时，同步更新显示的描述（在非编辑模式下）
+  useEffect(() => {
+    if (!isEditing && isOpen) {
+      setDisplayDescription(description || '');
+    }
+  }, [description, isEditing, isOpen]);
+
+  const handleStartEdit = () => {
+    setIsEditing(true);
+    setEditedDescription(displayDescription || '');
+  };
+
+  const handleCancelEdit = () => {
+    setIsEditing(false);
+    setEditedDescription(displayDescription || '');
+  };
+
+  const handleSave = async () => {
+    if (onSave) {
+      setIsSaving(true);
+      try {
+        await onSave(datasetId, editedDescription.trim());
+        // 保存成功后，更新显示的描述并切换回查看模式
+        setDisplayDescription(editedDescription.trim());
+        setIsEditing(false);
+      } finally {
+        setIsSaving(false);
+      }
+    }
+  };
+
+  const hasDescription = displayDescription && displayDescription.trim();
+
   if (!isOpen) return null;
 
   return (
@@ -375,34 +426,96 @@ const ViewDescriptionDialog: React.FC<ViewDescriptionDialogProps> = ({
             </div>
             <div>
               <h3 className="text-lg font-bold text-white">{datasetName}</h3>
-              <p className="text-xs text-slate-400">数据集描述</p>
+              <p className="text-xs text-slate-400">
+                {isEditing ? '编辑描述' : '数据集描述'}
+              </p>
             </div>
           </div>
-          <button
-            onClick={onClose}
-            className="p-1 rounded hover:bg-slate-800 text-slate-500 hover:text-white transition-colors"
-          >
-            <X size={20} />
-          </button>
-        </div>
-
-        {/* Description Content */}
-        <div className="bg-slate-950 border border-slate-800 rounded-lg p-4 max-h-96 overflow-y-auto custom-scrollbar">
-          {description && description.trim() ? (
-            <p className="text-slate-300 text-sm leading-relaxed whitespace-pre-wrap">{description}</p>
-          ) : (
-            <p className="text-slate-600 text-sm italic">暂无描述</p>
+          {!isEditing && (
+            <button
+              onClick={onClose}
+              className="p-1 rounded hover:bg-slate-800 text-slate-500 hover:text-white transition-colors"
+            >
+              <X size={20} />
+            </button>
           )}
         </div>
 
-        {/* Close Button */}
-        <div className="mt-4 flex justify-end">
-          <button
-            onClick={onClose}
-            className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-lg text-sm transition-colors border border-slate-700"
-          >
-            关闭
-          </button>
+        {/* Description Content */}
+        {isEditing ? (
+          // 编辑模式
+          <div className="space-y-3">
+            <textarea
+              value={editedDescription}
+              onChange={(e) => setEditedDescription(e.target.value)}
+              placeholder="输入数据集描述..."
+              rows={8}
+              className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-3 text-white outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 transition-all resize-none text-sm leading-relaxed"
+              disabled={isSaving}
+              autoFocus
+            />
+            <div className="flex justify-between items-center text-xs text-slate-500">
+              <span>{editedDescription.length} / 1000 字符</span>
+              {editedDescription.length > 1000 && (
+                <span className="text-red-400">描述超出长度限制</span>
+              )}
+            </div>
+          </div>
+        ) : (
+          // 查看模式
+          <div className="bg-slate-950 border border-slate-800 rounded-lg p-4 max-h-96 overflow-y-auto custom-scrollbar">
+            {hasDescription ? (
+              <p className="text-slate-300 text-sm leading-relaxed whitespace-pre-wrap">{displayDescription}</p>
+            ) : (
+              <p className="text-slate-600 text-sm italic">暂无描述</p>
+            )}
+          </div>
+        )}
+
+        {/* Buttons */}
+        <div className="mt-4 flex justify-end gap-2">
+          {isEditing ? (
+            // 编辑模式按钮
+            <>
+              <button
+                onClick={handleCancelEdit}
+                disabled={isSaving}
+                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-lg text-sm transition-colors border border-slate-700 disabled:opacity-50"
+              >
+                取消
+              </button>
+              <button
+                onClick={handleSave}
+                disabled={isSaving || editedDescription.trim().length > 1000}
+                className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center"
+              >
+                {isSaving ? (
+                  <>
+                    <Loader2 size={14} className="mr-2 animate-spin" />
+                    保存中
+                  </>
+                ) : (
+                  '保存'
+                )}
+              </button>
+            </>
+          ) : (
+            // 查看模式按钮
+            <>
+              <button
+                onClick={handleStartEdit}
+                className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg text-sm transition-colors"
+              >
+                编辑
+              </button>
+              <button
+                onClick={onClose}
+                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-lg text-sm transition-colors border border-slate-700"
+              >
+                关闭
+              </button>
+            </>
+          )}
         </div>
       </div>
     </div>
@@ -818,6 +931,25 @@ const DatasetManager: React.FC = () => {
       alert(err.message || '删除数据集失败，请重试');
     } finally {
       setIsDeleting(false);
+    }
+  };
+
+  // 保存数据集描述
+  const handleSaveDescription = async (datasetId: string, newDescription: string) => {
+    try {
+      await datasetService.updateDataset(parseInt(datasetId), {
+        description: newDescription || undefined
+      });
+      // 刷新列表
+      await fetchDatasets();
+      // 更新当前查看的数据集描述，创建新对象确保触发重新渲染
+      setDatasetToViewDescription(prev => {
+        if (!prev || prev.id !== datasetId) return prev;
+        return { ...prev, description: newDescription };
+      });
+    } catch (err: any) {
+      alert(err.message || '保存描述失败，请重试');
+      throw err; // 重新抛出错误，让组件知道保存失败
     }
   };
 
@@ -1243,7 +1375,9 @@ const DatasetManager: React.FC = () => {
         isOpen={viewDescriptionDialogOpen}
         onClose={() => setViewDescriptionDialogOpen(false)}
         datasetName={datasetToViewDescription?.name || ''}
+        datasetId={datasetToViewDescription?.id || ''}
         description={datasetToViewDescription?.description}
+        onSave={handleSaveDescription}
       />
     </div>
   );
