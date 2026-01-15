@@ -980,13 +980,61 @@ const DatasetManager: React.FC = () => {
     );
   }
 
-  // 空状态
+  // 空状态 - 显示顶部header和中心导入卡片
   if (datasets.length === 0) {
     return (
-      <div className="h-full flex flex-col items-center justify-center p-6 space-y-6">
-        <Folder size={48} className="text-slate-600" />
-        <p className="text-slate-400 text-sm">暂无数据集</p>
-        <p className="text-slate-500 text-xs">点击下方"导入数据集"按钮添加您的第一个数据集</p>
+      <div className="h-full flex flex-col p-6 space-y-6">
+        {/* Header - 保留导入按钮 */}
+        <div className="flex justify-between items-center">
+          <div>
+            <h2 className="text-2xl font-bold text-white">数据集管理</h2>
+            <p className="text-slate-400 text-sm">查看原始数据分布与元信息。</p>
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={fetchDatasets}
+              disabled={loading}
+              className="flex items-center px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white font-bold rounded-xl border border-slate-700 transition-all disabled:opacity-50"
+              title="刷新列表"
+            >
+              <RefreshCw size={18} className={`mr-2 ${loading ? 'animate-spin' : ''}`} />
+              刷新
+            </button>
+            <button
+              onClick={handleOpenImportDialog}
+              className="flex items-center px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-white font-bold rounded-xl shadow-lg shadow-cyan-900/20 transition-all"
+            >
+              <Upload size={18} className="mr-2" /> 导入数据
+            </button>
+          </div>
+        </div>
+
+        {/* 中心导入卡片 */}
+        <div className="flex-1 flex items-center justify-center">
+          <div
+            onClick={handleOpenImportDialog}
+            className="p-12 rounded-2xl border-2 border-dashed border-slate-700 hover:border-cyan-500 hover:bg-slate-900/40 cursor-pointer transition-all flex flex-col items-center justify-center text-slate-500 hover:text-cyan-400 group max-w-md w-full"
+          >
+            <div className="w-20 h-20 rounded-full flex items-center justify-center bg-slate-900 group-hover:bg-cyan-900/20 transition-all mb-6">
+              <Upload size={40} className="group-hover:scale-110 transition-transform" />
+            </div>
+            <h3 className="text-xl font-bold text-white mb-2">导入您的第一个数据集</h3>
+            <p className="text-sm text-slate-400 text-center mb-4">
+              上传压缩包（支持 .zip, .tar, .tar.gz 等格式）创建新数据集
+            </p>
+            <div className="px-6 py-3 bg-cyan-600 hover:bg-cyan-500 text-white font-medium rounded-xl transition-all flex items-center group-hover:scale-105">
+              <Plus size={18} className="mr-2" />
+              选择文件上传
+            </div>
+          </div>
+        </div>
+
+        {/* Import Dataset Dialog */}
+        <ImportDatasetDialog
+          isOpen={importDialogOpen}
+          onClose={() => setImportDialogOpen(false)}
+          onUploadComplete={handleUploadComplete}
+        />
       </div>
     );
   }

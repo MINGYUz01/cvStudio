@@ -57,6 +57,16 @@ class DatasetResponse(DatasetBase):
     created_at: datetime
     updated_at: Optional[datetime] = None
 
+    @validator('classes', pre=True)
+    def normalize_classes(cls, v):
+        """规范化classes字段，支持字典或列表格式"""
+        if isinstance(v, dict):
+            # 如果是字典，提取class_names列表
+            return v.get('class_names', [])
+        elif isinstance(v, list):
+            return v
+        return []
+
     class Config:
         from_attributes = True
 
