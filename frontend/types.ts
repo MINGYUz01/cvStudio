@@ -57,14 +57,23 @@ export interface LogEntry {
 }
 
 export interface WeightCheckpoint {
-  id: string;
+  id: number;  // Changed to number to match database ID
   name: string;
-  architecture: string; // e.g., 'YOLOv8', 'ResNet50'
-  format: 'PyTorch' | 'ONNX' | 'TensorRT';
-  size: string;
-  accuracy: string; // e.g., 'mAP 0.89'
-  created: string;
-  tags: string[];
+  display_name: string;
+  description?: string;
+  task_type: 'classification' | 'detection' | 'segmentation';
+  version: string;
+  file_name: string;
+  file_size?: number;
+  file_size_mb?: number;
+  framework: 'pytorch' | 'onnx';
+  created_at: string;
+  // Legacy fields for backward compatibility
+  architecture?: string;  // Can be derived from task_type
+  format?: 'PyTorch' | 'ONNX' | 'TensorRT';  // Mapped from framework
+  size?: string;  // Can be derived from file_size_mb
+  accuracy?: string;  // Not in DB, optional
+  tags?: string[];  // Not in DB, optional
 }
 
 // ==================== 数据增强相关类型 ====================

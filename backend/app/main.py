@@ -10,12 +10,12 @@ from contextlib import asynccontextmanager
 import uvicorn
 
 from app.core.config import settings
-from app.api.v1 import auth, datasets, models, training, inference, users, websocket, training_logs, augmentation
+from app.api.v1 import auth, datasets, models, training, inference, users, websocket, training_logs, augmentation, weights
 from app.core.exceptions import setup_exception_handlers
 from app.utils.metrics_collector import collector
 from app.api.websocket import manager
 from app.database import create_tables
-from app.models import User, Dataset, Model, TrainingRun, Checkpoint, InferenceJob, AugmentationStrategy
+from app.models import User, Dataset, Model, WeightLibrary, TrainingRun, Checkpoint, InferenceJob, AugmentationStrategy
 
 
 @asynccontextmanager
@@ -138,6 +138,13 @@ def create_application() -> FastAPI:
         augmentation.router,
         prefix=f"{settings.API_V1_STR}/augmentation",
         tags=["数据增强"]
+    )
+
+    # 权重库API
+    app.include_router(
+        weights.router,
+        prefix=f"{settings.API_V1_STR}/weights",
+        tags=["权重库"]
     )
 
     return app

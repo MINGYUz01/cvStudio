@@ -18,14 +18,7 @@ const CHART_COLORS = ['#22d3ee', '#a855f7', '#f43f5e', '#fbbf24', '#34d399', '#6
 // Constants for precise layout
 const NODE_WIDTH = 160;
 
-// --- MOCK DATA: Weights ---
-const INITIAL_WEIGHTS: WeightCheckpoint[] = [
-    { id: 'w1', name: 'yolov8n-traffic-best.pt', architecture: 'YOLOv8-Nano', format: 'PyTorch', size: '6.2 MB', accuracy: 'mAP 0.68', created: '2023-10-25', tags: ['Production', 'Traffic'] },
-    { id: 'w2', name: 'resnet50-mri-v2.pt', architecture: 'ResNet50', format: 'PyTorch', size: '98 MB', accuracy: 'Acc 94.2%', created: '2023-10-24', tags: ['Medical', 'Best'] },
-    { id: 'w3', name: 'yolov8-face-deploy.onnx', architecture: 'YOLOv8-Small', format: 'ONNX', size: '12 MB', accuracy: 'mAP 0.72', created: '2023-10-20', tags: ['Edge', 'Optimized'] },
-];
-
-// 1. ATOMIC OPERATORS
+// --- ATOMIC OPERATORS ---
 const ATOMIC_NODES: Record<string, { label: string, color: string, category: string, params: { name: string, type: 'text'|'number'|'bool'|'select'|'dims4'|'dimsN', default: any, options?: string[] }[] }> = {
   // IO
   "Input": { label: "Input", color: "bg-slate-600", category: "IO", params: [{ name: "c", type: "number", default: 3 }, { name: "h", type: "number", default: 640 }, { name: "w", type: "number", default: 640 }] },
@@ -176,10 +169,11 @@ const ModelBuilder: React.FC = () => {
   const [isLoadingModels, setIsLoadingModels] = useState(false);
 
   // Weights State
-  const [weights, setWeights] = useState<WeightCheckpoint[]>(INITIAL_WEIGHTS);
+  const [weights, setWeights] = useState<WeightCheckpoint[]>([]);
+  const [isLoadingWeights, setIsLoadingWeights] = useState(false);
 
   // Generated Model Files State
-  const [generatedFiles, setGeneratedFiles] = useState<Array<{filename: string, size: number, created: string}>>([]);
+  const [generatedFiles, setGeneratedFiles] = useState<Array<{id: number, filename: string, name: string, size: number, created: string}>>([]);
 
   // 从服务器加载架构列表
   const loadServerArchitectures = async () => {
@@ -217,6 +211,48 @@ const ModelBuilder: React.FC = () => {
     }
   };
 
+  // 从服务器加载权重列表
+  const loadServerWeights = async () => {
+    setIsLoadingWeights(true);
+    try {
+      const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1'}/weights`, {
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('access_token')}`,
+        },
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        // 将服务器权重转换为 WeightCheckpoint 格式
+        const serverWeights: WeightCheckpoint[] = (data.weights || []).map((w: any) => ({
+          id: w.id,
+          name: w.name,
+          display_name: w.display_name || `${w.name} v${w.version}`,
+          description: w.description,
+          task_type: w.task_type,
+          version: w.version,
+          file_name: w.file_name,
+          file_size: w.file_size,
+          file_size_mb: w.file_size_mb,
+          framework: w.framework,
+          created_at: w.created_at,
+          // Legacy fields for UI compatibility
+          architecture: w.task_type === 'classification' ? 'Classifier' :
+                       w.task_type === 'detection' ? 'YOLOv8' :
+                       w.task_type === 'segmentation' ? 'SegNet' : 'Unknown',
+          format: w.framework === 'pytorch' ? 'PyTorch' : 'ONNX',
+          size: w.file_size_mb ? `${w.file_size_mb} MB` : 'Unknown',
+        }));
+        setWeights(serverWeights);
+      }
+    } catch (error) {
+      console.error('加载服务器权重列表失败:', error);
+      setWeights([]);
+    } finally {
+      setIsLoadingWeights(false);
+    }
+  };
+
   // 组件挂载时从服务器加载架构列表
   useEffect(() => {
     loadServerArchitectures();
@@ -249,6 +285,7 @@ const ModelBuilder: React.FC = () => {
   const [codePreviewSource, setCodePreviewSource] = useState<'builder' | 'library'>('builder');
   // 当前预览的文件名（用于library模式下的删除操作）
   const [currentPreviewFilename, setCurrentPreviewFilename] = useState<string | null>(null);
+  const [currentPreviewFileId, setCurrentPreviewFileId] = useState<number | null>(null);
 
   // Node Expansion State (折叠式卡片)
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
@@ -328,17 +365,27 @@ const ModelBuilder: React.FC = () => {
       });
       if (response.ok) {
         const data = await response.json();
-        setGeneratedFiles(data.files || []);
+        // 后端返回 data.codes，需要映射为前端期望的格式
+        const files = (data.codes || []).map((item: any) => ({
+          id: item.id,
+          filename: item.file_name,
+          name: item.name,
+          size: item.code_size,
+          created: item.created
+        }));
+        setGeneratedFiles(files);
       }
     } catch (error) {
       console.error('加载生成文件失败:', error);
     }
   };
 
-  // 切换到生成文件标签时加载文件列表
+  // 切换标签时加载对应数据
   useEffect(() => {
     if (activeTab === 'generated') {
       loadGeneratedFiles();
+    } else if (activeTab === 'weights') {
+      loadServerWeights();
     }
   }, [activeTab]);
 
@@ -599,9 +646,9 @@ const ModelBuilder: React.FC = () => {
     return metadata;
   };
 
-  const handlePreviewFile = async (filename: string) => {
+  const handlePreviewFile = async (fileId: number, filename: string) => {
     try {
-      const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1'}/models/generated-files/${filename}`, {
+      const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1'}/models/generated-files/${fileId}`, {
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('access_token')}`,
         },
@@ -614,6 +661,7 @@ const ModelBuilder: React.FC = () => {
         metadata.filename = filename;
         setCodeMetadata(metadata);
         setCurrentPreviewFilename(filename);
+        setCurrentPreviewFileId(fileId);
         setCodePreviewSource('library');
         setShowCodePreview(true);
       }
@@ -622,9 +670,9 @@ const ModelBuilder: React.FC = () => {
     }
   };
 
-  const handleDownloadFile = async (filename: string) => {
+  const handleDownloadFile = async (fileId: number, filename: string) => {
     try {
-      const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1'}/models/generated-files/${filename}`, {
+      const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1'}/models/generated-files/${fileId}`, {
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('access_token')}`,
         },
@@ -687,9 +735,9 @@ const ModelBuilder: React.FC = () => {
     }
   };
 
-  const handleDeleteFile = async (filename: string) => {
+  const handleDeleteFile = async (fileId: number) => {
     try {
-      const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1'}/models/generated-files/${filename}`, {
+      const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1'}/models/generated-files/${fileId}`, {
         method: 'DELETE',
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('access_token')}`,
@@ -708,10 +756,11 @@ const ModelBuilder: React.FC = () => {
    * 删除当前预览的文件并关闭预览
    */
   const handleDeleteCurrentPreview = async () => {
-    if (!currentPreviewFilename) return;
-    await handleDeleteFile(currentPreviewFilename);
+    if (!currentPreviewFileId) return;
+    await handleDeleteFile(currentPreviewFileId);
     setShowCodePreview(false);
     setCurrentPreviewFilename(null);
+    setCurrentPreviewFileId(null);
   };
 
   // --- ACTIONS ---
@@ -988,13 +1037,29 @@ const ModelBuilder: React.FC = () => {
       }
       // 4. DELETE WEIGHT
       else if (dialog.action === 'delete_weight' && dialog.data) {
-          // Check if it's a generated model file (string) or weight ID
-          if (typeof dialog.data === 'string' && dialog.data.endsWith('.py')) {
-              handleDeleteFile(dialog.data);
-          } else {
-              setWeights(prev => prev.filter(w => w.id !== dialog.data));
-              showNotification("权重文件已删除", "success");
-          }
+          // Delete weight from server via API
+          const weightId = dialog.data as number;
+          fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1'}/weights/${weightId}`, {
+              method: 'DELETE',
+              headers: {
+                  'Authorization': `Bearer ${localStorage.getItem('access_token')}`,
+              },
+          }).then(async (response) => {
+              if (response.ok) {
+                  setWeights(prev => prev.filter(w => w.id !== weightId));
+                  showNotification("权重文件已删除", "success");
+              } else {
+                  const error = await response.json();
+                  showNotification(`删除失败: ${error.detail || '未知错误'}`, 'error');
+              }
+          }).catch(() => {
+              showNotification("删除权重失败", 'error');
+          });
+      }
+      // 5. DELETE GENERATED FILE
+      else if (dialog.action === 'delete_file' && dialog.data) {
+          const fileId = dialog.data as number;
+          handleDeleteFile(fileId);
       }
 
       setDialog({ ...dialog, isOpen: false });
@@ -1760,58 +1825,73 @@ const ModelBuilder: React.FC = () => {
                     </div>
 
                     <div className="glass-panel rounded-xl border border-slate-800 overflow-hidden">
-                        <table className="w-full text-left border-collapse">
-                            <thead className="bg-slate-900/80 backdrop-blur text-xs font-bold text-slate-500 uppercase tracking-wider">
-                                <tr>
-                                    <th className="p-4 border-b border-slate-800">Filename</th>
-                                    <th className="p-4 border-b border-slate-800">Source Arch</th>
-                                    <th className="p-4 border-b border-slate-800">Format</th>
-                                    <th className="p-4 border-b border-slate-800">Metric</th>
-                                    <th className="p-4 border-b border-slate-800">Size</th>
-                                    <th className="p-4 border-b border-slate-800">Created</th>
-                                    <th className="p-4 border-b border-slate-800 text-right">Actions</th>
-                                </tr>
-                            </thead>
-                            <tbody className="divide-y divide-slate-800 text-sm">
-                                {weights.map(w => (
-                                    <tr key={w.id} className="hover:bg-slate-800/50 transition-colors group">
-                                        <td className="p-4">
-                                            <div className="flex items-center">
-                                                <div className="w-8 h-8 rounded bg-emerald-900/20 text-emerald-400 flex items-center justify-center mr-3">
-                                                    <HardDrive size={16} />
-                                                </div>
-                                                <div>
-                                                    <div className="font-bold text-white group-hover:text-emerald-400 transition-colors">{w.name}</div>
-                                                    <div className="flex mt-1 space-x-1">
-                                                        {w.tags.map(tag => (
-                                                            <span key={tag} className="text-[9px] px-1.5 py-0.5 rounded bg-slate-900 border border-slate-700 text-slate-400 flex items-center">
-                                                                {tag}
-                                                            </span>
-                                                        ))}
+                        {isLoadingWeights ? (
+                            <div className="p-12 text-center text-slate-500 flex flex-col items-center">
+                                <Loader2 size={32} className="animate-spin mb-4 opacity-50" />
+                                <p>加载权重列表中...</p>
+                            </div>
+                        ) : (
+                            <table className="w-full text-left border-collapse">
+                                <thead className="bg-slate-900/80 backdrop-blur text-xs font-bold text-slate-500 uppercase tracking-wider">
+                                    <tr>
+                                        <th className="p-4 border-b border-slate-800">Filename</th>
+                                        <th className="p-4 border-b border-slate-800">Task Type</th>
+                                        <th className="p-4 border-b border-slate-800">Format</th>
+                                        <th className="p-4 border-b border-slate-800">Version</th>
+                                        <th className="p-4 border-b border-slate-800">Size</th>
+                                        <th className="p-4 border-b border-slate-800">Created</th>
+                                        <th className="p-4 border-b border-slate-800 text-right">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-800 text-sm">
+                                    {weights.map(w => (
+                                        <tr key={w.id} className="hover:bg-slate-800/50 transition-colors group">
+                                            <td className="p-4">
+                                                <div className="flex items-center">
+                                                    <div className="w-8 h-8 rounded bg-emerald-900/20 text-emerald-400 flex items-center justify-center mr-3">
+                                                        <HardDrive size={16} />
+                                                    </div>
+                                                    <div>
+                                                        <div className="font-bold text-white group-hover:text-emerald-400 transition-colors">{w.display_name || w.name}</div>
+                                                        <div className="text-xs text-slate-500">{w.file_name}</div>
+                                                        {w.description && (
+                                                            <div className="text-xs text-slate-400 mt-1">{w.description}</div>
+                                                        )}
                                                     </div>
                                                 </div>
-                                            </div>
-                                        </td>
-                                        <td className="p-4 text-slate-300 font-mono text-xs">{w.architecture}</td>
-                                        <td className="p-4 text-slate-400">{w.format}</td>
-                                        <td className="p-4 text-emerald-400 font-mono font-bold">{w.accuracy}</td>
-                                        <td className="p-4 text-slate-400 font-mono">{w.size}</td>
-                                        <td className="p-4 text-slate-500 text-xs">{w.created}</td>
-                                        <td className="p-4 text-right">
-                                            <div className="flex justify-end space-x-2">
-                                                <button className="p-2 text-slate-500 hover:text-cyan-400 bg-slate-900/50 hover:bg-slate-900 rounded-lg transition-colors" title="Download">
-                                                    <Download size={14} />
-                                                </button>
-                                                <button onClick={() => handleDeleteWeight(w.id)} className="p-2 text-slate-500 hover:text-rose-400 bg-slate-900/50 hover:bg-slate-900 rounded-lg transition-colors" title="Delete">
-                                                    <Trash2 size={14} />
-                                                </button>
-                                            </div>
-                                        </td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                        {weights.length === 0 && (
+                                            </td>
+                                            <td className="p-4">
+                                                <span className={`px-2 py-1 rounded text-xs font-medium ${
+                                                    w.task_type === 'classification' ? 'bg-cyan-900/30 text-cyan-400 border border-cyan-800' :
+                                                    w.task_type === 'detection' ? 'bg-purple-900/30 text-purple-400 border border-purple-800' :
+                                                    w.task_type === 'segmentation' ? 'bg-amber-900/30 text-amber-400 border border-amber-800' :
+                                                    'bg-slate-800 text-slate-400'
+                                                }`}>
+                                                    {w.task_type === 'classification' ? '分类' :
+                                                     w.task_type === 'detection' ? '检测' :
+                                                     w.task_type === 'segmentation' ? '分割' : w.task_type}
+                                                </span>
+                                            </td>
+                                            <td className="p-4 text-slate-400">{w.format || w.framework}</td>
+                                            <td className="p-4 text-slate-500 font-mono text-xs">{w.version}</td>
+                                            <td className="p-4 text-slate-400 font-mono">{w.size || w.file_size_mb?.toFixed(2) + ' MB' || '-'}</td>
+                                            <td className="p-4 text-slate-500 text-xs">{w.created_at ? new Date(w.created_at).toLocaleDateString() : '-'}</td>
+                                            <td className="p-4 text-right">
+                                                <div className="flex justify-end space-x-2">
+                                                    <button className="p-2 text-slate-500 hover:text-cyan-400 bg-slate-900/50 hover:bg-slate-900 rounded-lg transition-colors" title="Download">
+                                                        <Download size={14} />
+                                                    </button>
+                                                    <button onClick={() => handleDeleteWeight(w.id)} className="p-2 text-slate-500 hover:text-rose-400 bg-slate-900/50 hover:bg-slate-900 rounded-lg transition-colors" title="Delete">
+                                                        <Trash2 size={14} />
+                                                    </button>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        )}
+                        {!isLoadingWeights && weights.length === 0 && (
                             <div className="p-12 text-center text-slate-500">
                                 <Database size={48} className="mx-auto mb-4 opacity-20" />
                                 <p>暂无权重文件，请完成训练后保存</p>
@@ -1849,7 +1929,7 @@ const ModelBuilder: React.FC = () => {
                             </thead>
                             <tbody className="divide-y divide-slate-800 text-sm">
                                 {generatedFiles.map((file) => (
-                                    <tr key={file.filename} className="hover:bg-slate-800/50 transition-colors group">
+                                    <tr key={file.id} className="hover:bg-slate-800/50 transition-colors group">
                                         <td className="p-4">
                                             <div className="flex items-center">
                                                 <div className="w-8 h-8 rounded bg-amber-900/20 text-amber-400 flex items-center justify-center mr-3">
@@ -1869,14 +1949,14 @@ const ModelBuilder: React.FC = () => {
                                         <td className="p-4 text-right">
                                             <div className="flex justify-end space-x-2">
                                                 <button
-                                                    onClick={() => handlePreviewFile(file.filename)}
+                                                    onClick={() => handlePreviewFile(file.id, file.filename)}
                                                     className="p-2 text-slate-500 hover:text-cyan-400 bg-slate-900/50 hover:bg-slate-900 rounded-lg transition-colors"
                                                     title="预览代码"
                                                 >
                                                     <FileText size={14} />
                                                 </button>
                                                 <button
-                                                    onClick={() => handleDownloadFile(file.filename)}
+                                                    onClick={() => handleDownloadFile(file.id, file.filename)}
                                                     className="p-2 text-slate-500 hover:text-emerald-400 bg-slate-900/50 hover:bg-slate-900 rounded-lg transition-colors"
                                                     title="下载"
                                                 >
@@ -1889,8 +1969,8 @@ const ModelBuilder: React.FC = () => {
                                                             type: 'confirm',
                                                             title: '删除文件',
                                                             message: `确定要删除 ${file.filename} 吗？`,
-                                                            action: 'delete_weight',
-                                                            data: file.filename
+                                                            action: 'delete_file',
+                                                            data: file.id
                                                         });
                                                     }}
                                                     className="p-2 text-slate-500 hover:text-rose-400 bg-slate-900/50 hover:bg-slate-900 rounded-lg transition-colors"

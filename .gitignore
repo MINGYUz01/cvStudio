@@ -71,3 +71,4 @@ nul
 # Generated data files
 data/
 .claude/settings.local.json
+tmpclaude*
