@@ -23,7 +23,9 @@ class User(Base):
     # updated_at = Column(DateTime(timezone=True), onupdate=func.now())  # 暂时注释掉
 
     # 关联关系
-    models = relationship("Model", back_populates="creator")
+    models = relationship("Model", back_populates="creator")  # 待废弃
+    model_architectures = relationship("ModelArchitecture", back_populates="creator")
+    generated_codes = relationship("GeneratedCode", back_populates="creator")
     training_runs = relationship("TrainingRun", back_populates="creator")
     inference_jobs = relationship("InferenceJob", back_populates="creator")
     augmentation_strategies = relationship("AugmentationStrategy", back_populates="user")

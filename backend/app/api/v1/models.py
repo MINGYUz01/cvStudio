@@ -8,24 +8,42 @@
 日期: 2025-12-25
 """
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Depends
 from pydantic import BaseModel, Field
 from typing import List, Dict, Optional, Any
 from pathlib import Path
 from datetime import datetime
+from sqlalchemy.orm import Session
 
 from app.utils.graph_traversal import analyze_graph_structure, Graph
 from app.utils.shape_inference import infer_shapes_from_graph
 from app.services.code_generator_service import CodeGeneratorService
+from app.services.model_service import (
+    ModelArchitectureService,
+    GeneratedCodeService
+)
 from app.schemas.code_generation import (
     CodeGenerationRequest,
     CodeGenerationResponse,
     CodeValidationRequest,
     CodeValidationResponse
 )
+from app.schemas.model import (
+    ModelArchitectureCreate,
+    ModelArchitectureResponse,
+    ModelArchitectureList,
+    GeneratedCodeResponse,
+    GeneratedCodeList
+)
+from app.dependencies import get_db
 
 
 router = APIRouter()
+
+# 初始化服务
+code_generator_service = CodeGeneratorService()
+architecture_service = ModelArchitectureService()
+code_service = GeneratedCodeService()
 
 
 # ==============================
@@ -322,17 +340,10 @@ async def analyze_and_infer(graph: GraphModel):
             detail=f"分析失败: {str(e)}"
         )
 
+
 # ==============================
 # 代码生成相关端点
 # ==============================
-
-# 初始化代码生成服务
-code_generator_service = CodeGeneratorService()
-
-# 模型文件存储目录
-MODEL_DIR = Path("data/models")
-MODEL_DIR.mkdir(parents=True, exist_ok=True)
-
 
 @router.post("/generate", response_model=CodeGenerationResponse)
 async def generate_pytorch_code(
@@ -453,31 +464,39 @@ async def list_templates():
 
 
 # ==============================
-# 生成的模型文件管理端点
+# 生成的模型文件管理端点（数据库版本）
 # ==============================
 
-@router.get("/generated-files")
-async def list_generated_files():
+@router.get("/generated-files", response_model=GeneratedCodeList)
+async def list_generated_files(
+    skip: int = Query(0, ge=0, description="跳过数量"),
+    limit: int = Query(100, ge=1, le=100, description="返回数量"),
+    db: Session = Depends(get_db)
+):
     """
     获取已生成的模型文件列表
 
-    返回服务器上保存的所有生成的模型文件信息。
+    从数据库返回所有保存的模型代码文件信息。
     """
     try:
-        files = []
-        if MODEL_DIR.exists():
-            for filepath in MODEL_DIR.glob("*.py"):
-                stat = filepath.stat()
-                files.append({
-                    "filename": filepath.name,
-                    "size": stat.st_size,
-                    "created": datetime.fromtimestamp(stat.st_ctime).isoformat()
-                })
+        codes = code_service.list_codes(db, skip=skip, limit=limit)
+        total = code_service.count_codes(db)
 
-        return {
-            "files": sorted(files, key=lambda x: x["created"], reverse=True),
-            "total": len(files)
-        }
+        items = []
+        for code in codes:
+            items.append({
+                "id": code.id,
+                "name": code.name,
+                "file_name": code.file_name,
+                "code_size": code.code_size,
+                "template_tag": code.template_tag,
+                "created": code.created_at.isoformat() if code.created_at else ""
+            })
+
+        return GeneratedCodeList(
+            codes=items,
+            total=total
+        )
 
     except Exception as e:
         raise HTTPException(
@@ -486,30 +505,28 @@ async def list_generated_files():
         )
 
 
-@router.get("/generated-files/{filename}")
-async def get_generated_file(filename: str):
+@router.get("/generated-files/{code_id}")
+async def get_generated_file(
+    code_id: int,
+    db: Session = Depends(get_db)
+):
     """
     获取生成的模型文件内容
 
-    根据文件名返回模型文件的完整代码内容。
+    根据ID返回模型文件的完整代码内容。
     """
     try:
-        # 安全检查：防止路径遍历攻击
-        if ".." in filename or "/" in filename or "\\" in filename:
-            raise HTTPException(400, "无效的文件名")
-
-        filepath = MODEL_DIR / filename
-
-        if not filepath.exists():
+        code = code_service.get_code(db, code_id)
+        if not code:
             raise HTTPException(404, "文件不存在")
 
-        with open(filepath, "r", encoding="utf-8") as f:
-            content = f.read()
+        content = code_service.load_code_file(code)
 
         return {
-            "filename": filename,
+            "id": code.id,
+            "filename": code.file_name,
             "content": content,
-            "size": filepath.stat().st_size
+            "size": code.code_size
         }
 
     except HTTPException:
@@ -521,26 +538,22 @@ async def get_generated_file(filename: str):
         )
 
 
-@router.delete("/generated-files/{filename}")
-async def delete_generated_file(filename: str):
+@router.delete("/generated-files/{code_id}")
+async def delete_generated_file(
+    code_id: int,
+    db: Session = Depends(get_db)
+):
     """
     删除生成的模型文件
 
-    根据文件名删除服务器上的模型文件。
+    根据ID删除模型文件（同时删除数据库记录和物理文件）。
     """
     try:
-        # 安全检查：防止路径遍历攻击
-        if ".." in filename or "/" in filename or "\\" in filename:
-            raise HTTPException(400, "无效的文件名")
-
-        filepath = MODEL_DIR / filename
-
-        if not filepath.exists():
+        success = code_service.delete_code(db, code_id, physical=True)
+        if not success:
             raise HTTPException(404, "文件不存在")
 
-        filepath.unlink()
-
-        return {"message": "文件已删除", "filename": filename}
+        return {"message": "文件已删除", "id": code_id}
 
     except HTTPException:
         raise
@@ -552,40 +565,38 @@ async def delete_generated_file(filename: str):
 
 
 @router.post("/save-code")
-async def save_code_to_library(request: dict):
+async def save_code_to_library(
+    request: dict,
+    db: Session = Depends(get_db)
+):
     """
-    直接保存代码到模型库
+    保存代码到模型库
 
-    允许用户将预览的代码直接保存到服务器，无需重新生成。
+    将代码保存到数据库和文件系统。
     """
     try:
         code = request.get("code")
-        filename = request.get("filename")
         model_name = request.get("model_name", "Model")
+        template_tag = request.get("template_tag")
+        meta = request.get("meta")
 
         if not code:
             raise HTTPException(400, "代码内容不能为空")
 
-        # 如果没有提供文件名，自动生成
-        if not filename:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            safe_name = model_name.replace(" ", "_").replace("-", "_")
-            filename = f"{safe_name}_{timestamp}.py"
-
-        # 安全检查文件名
-        if ".." in filename or "/" in filename or "\\" in filename:
-            raise HTTPException(400, "无效的文件名")
-
-        filepath = MODEL_DIR / filename
-
-        # 写入文件
-        with open(filepath, "w", encoding="utf-8") as f:
-            f.write(code)
+        # 保存到数据库和文件
+        saved_code = code_service.create_code(
+            db=db,
+            name=model_name,
+            code=code,
+            template_tag=template_tag,
+            meta=meta
+        )
 
         return {
             "message": "代码已保存",
-            "filename": filename,
-            "filepath": str(filepath)
+            "id": saved_code.id,
+            "filename": saved_code.file_name,
+            "filepath": saved_code.file_path
         }
 
     except HTTPException:
@@ -598,13 +609,8 @@ async def save_code_to_library(request: dict):
 
 
 # ==============================
-# 模型架构管理端点
+# 模型架构管理端点（数据库版本）
 # ==============================
-
-# 模型架构存储目录
-ARCHITECTURE_DIR = Path("data/architectures")
-ARCHITECTURE_DIR.mkdir(parents=True, exist_ok=True)
-
 
 class ArchitectureModel(BaseModel):
     """模型架构数据模型"""
@@ -620,89 +626,59 @@ class ArchitectureModel(BaseModel):
 @router.post("/architectures")
 async def save_architecture(
     architecture: ArchitectureModel,
-    overwrite: bool = Query(False, description="是否覆盖同名文件"),
-    target_filename: Optional[str] = Query(None, description="指定保存的目标文件名（用于更新原文件，不管名称是否改变）")
+    overwrite: bool = Query(False, description="是否覆盖同名架构"),
+    target_id: Optional[int] = Query(None, description="指定目标ID（用于更新）"),
+    target_filename: Optional[str] = Query(None, description="指定目标文件名（用于更新，兼容旧版本）"),
+    db: Session = Depends(get_db)
 ):
     """
-    保存模型架构到服务器
+    保存模型架构到数据库
 
-    将模型架构数据保存为 JSON 文件到 data/architectures/ 目录。
-    - 如果指定了 target_filename，则保存到指定文件（更新原文件）
-    - 如果 overwrite=true，则覆盖同名文件；否则自动添加时间戳。
+    将模型架构数据保存到数据库和文件系统。
+    - 如果指定了 target_id，则更新指定ID的架构
+    - 如果指定了 target_filename，则更新指定文件名的架构（兼容旧版本）
+    - 如果 overwrite=true，则覆盖同名架构；否则报错
     """
     try:
-        import json
+        # 构建创建数据
+        create_data = ModelArchitectureCreate(
+            name=architecture.name,
+            description=architecture.description,
+            version=architecture.version,
+            type=architecture.type,
+            nodes=architecture.nodes,
+            connections=architecture.connections
+        )
 
-        # 确定目标文件名
-        if target_filename:
-            # 使用指定的文件名（用于更新原文件）
-            filename = target_filename
-            filepath = ARCHITECTURE_DIR / filename
-        else:
-            # 根据架构名称生成文件名
-            safe_name = architecture.name.replace(" ", "_").replace("/", "_").replace("\\", "_")
-            filename = f"{safe_name}.json"
-            filepath = ARCHITECTURE_DIR / filename
+        # 确定更新目标：优先使用target_id，其次使用target_filename
+        update_target = None
+        if target_id:
+            update_target = str(target_id)
+        elif target_filename:
+            update_target = target_filename
 
-            # 如果文件已存在且不覆盖，添加时间戳
-            if filepath.exists() and not overwrite:
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                filename = f"{safe_name}_{timestamp}.json"
-                filepath = ARCHITECTURE_DIR / filename
+        # 通过服务层保存
+        saved_arch = architecture_service.create_architecture(
+            db=db,
+            data=create_data,
+            user_id=None,  # TODO: 从认证中获取用户ID
+            overwrite=overwrite,
+            target_filename=update_target
+        )
 
-        # 检查文件是否已存在（用于判断是更新还是新建）
-        if filepath.exists():
-            # 覆盖模式：保留原有的创建时间
-            with open(filepath, "r", encoding="utf-8") as f:
-                old_data = json.load(f)
-                created = old_data.get("created", datetime.now().isoformat())
-
-            data = {
-                "name": architecture.name,
-                "description": architecture.description,
-                "version": architecture.version,
-                "type": architecture.type,
-                "created": created,
-                "updated": datetime.now().isoformat(),
-                "nodes": architecture.nodes,
-                "connections": architecture.connections,
-                "thumbnail": architecture.thumbnail
-            }
-
-            with open(filepath, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-
-            return {
-                "message": "架构已更新",
-                "filename": filename,
-                "filepath": str(filepath),
-                "updated": True
-            }
-
-        # 新建文件
-        data = {
-            "name": architecture.name,
-            "description": architecture.description,
-            "version": architecture.version,
-            "type": architecture.type,
-            "created": datetime.now().isoformat(),
-            "updated": datetime.now().isoformat(),
-            "nodes": architecture.nodes,
-            "connections": architecture.connections,
-            "thumbnail": architecture.thumbnail
-        }
-
-        # 写入文件
-        with open(filepath, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        # 判断是更新还是新建
+        is_update = update_target is not None
 
         return {
-            "message": "架构已保存",
-            "filename": filename,
-            "filepath": str(filepath),
-            "updated": False
+            "message": "架构已更新" if is_update else "架构已保存",
+            "id": saved_arch.id,
+            "filename": saved_arch.file_name,
+            "filepath": saved_arch.file_path,
+            "updated": is_update
         }
 
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     except Exception as e:
         raise HTTPException(
             status_code=500,
@@ -710,44 +686,40 @@ async def save_architecture(
         )
 
 
-@router.get("/architectures")
-async def list_architectures():
+@router.get("/architectures", response_model=ModelArchitectureList)
+async def list_architectures(
+    skip: int = Query(0, ge=0, description="跳过数量"),
+    limit: int = Query(100, ge=1, le=100, description="返回数量"),
+    db: Session = Depends(get_db)
+):
     """
     获取已保存的模型架构列表
 
-    返回服务器上保存的所有模型架构信息。
+    从数据库返回所有模型架构信息。
     """
     try:
-        import json
+        architectures = architecture_service.list_architectures(db, skip=skip, limit=limit)
+        total = architecture_service.count_architectures(db)
 
-        architectures = []
-        if ARCHITECTURE_DIR.exists():
-            for filepath in ARCHITECTURE_DIR.glob("*.json"):
-                try:
-                    with open(filepath, "r", encoding="utf-8") as f:
-                        data = json.load(f)
+        items = []
+        for arch in architectures:
+            items.append({
+                "id": arch.id,
+                "name": arch.name,
+                "description": arch.description or "",
+                "version": arch.version,
+                "type": arch.type,
+                "node_count": arch.node_count,
+                "connection_count": arch.connection_count,
+                "file_name": arch.file_name,
+                "created": arch.created_at.isoformat() if arch.created_at else "",
+                "updated": arch.updated_at.isoformat() if arch.updated_at else ""
+            })
 
-                    stat = filepath.stat()
-                    architectures.append({
-                        "filename": filepath.name,
-                        "name": data.get("name", filepath.stem),
-                        "description": data.get("description", ""),
-                        "version": data.get("version", "v1.0"),
-                        "type": data.get("type", "Custom"),
-                        "node_count": len(data.get("nodes", [])),
-                        "connection_count": len(data.get("connections", [])),
-                        "created": data.get("created", datetime.fromtimestamp(stat.st_ctime).isoformat()),
-                        "updated": data.get("updated", datetime.fromtimestamp(stat.st_mtime).isoformat()),
-                        "size": stat.st_size
-                    })
-                except Exception as e:
-                    # 跳过损坏的文件
-                    continue
-
-        return {
-            "architectures": sorted(architectures, key=lambda x: x["updated"], reverse=True),
-            "total": len(architectures)
-        }
+        return ModelArchitectureList(
+            architectures=items,
+            total=total
+        )
 
     except Exception as e:
         raise HTTPException(
@@ -756,32 +728,25 @@ async def list_architectures():
         )
 
 
-@router.get("/architectures/{filename}")
-async def get_architecture(filename: str):
+@router.get("/architectures/{architecture_id}")
+async def get_architecture(
+    architecture_id: int,
+    db: Session = Depends(get_db)
+):
     """
     获取模型架构的详细内容
 
-    根据文件名返回模型架构的完整数据。
+    根据ID返回模型架构的完整数据。
     """
     try:
-        import json
+        architecture = architecture_service.get_architecture(db, architecture_id)
+        if not architecture:
+            raise HTTPException(404, "架构不存在")
 
-        # 安全检查：防止路径遍历攻击
-        if ".." in filename or "/" in filename or "\\" in filename:
-            raise HTTPException(400, "无效的文件名")
+        # 从文件加载完整数据
+        data = architecture_service.load_architecture_file(architecture)
 
-        filepath = ARCHITECTURE_DIR / filename
-
-        if not filepath.exists():
-            raise HTTPException(404, "架构文件不存在")
-
-        with open(filepath, "r", encoding="utf-8") as f:
-            data = json.load(f)
-
-        return {
-            "filename": filename,
-            **data
-        }
+        return data
 
     except HTTPException:
         raise
@@ -792,26 +757,22 @@ async def get_architecture(filename: str):
         )
 
 
-@router.delete("/architectures/{filename}")
-async def delete_architecture(filename: str):
+@router.delete("/architectures/{architecture_id}")
+async def delete_architecture(
+    architecture_id: int,
+    db: Session = Depends(get_db)
+):
     """
     删除模型架构
 
-    根据文件名删除服务器上的模型架构文件。
+    根据ID删除模型架构（同时删除数据库记录和物理文件）。
     """
     try:
-        # 安全检查：防止路径遍历攻击
-        if ".." in filename or "/" in filename or "\\" in filename:
-            raise HTTPException(400, "无效的文件名")
+        success = architecture_service.delete_architecture(db, architecture_id, physical=True)
+        if not success:
+            raise HTTPException(404, "架构不存在")
 
-        filepath = ARCHITECTURE_DIR / filename
-
-        if not filepath.exists():
-            raise HTTPException(404, "架构文件不存在")
-
-        filepath.unlink()
-
-        return {"message": "架构已删除", "filename": filename}
+        return {"message": "架构已删除", "id": architecture_id}
 
     except HTTPException:
         raise

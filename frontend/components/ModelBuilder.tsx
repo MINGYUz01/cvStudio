@@ -85,7 +85,8 @@ interface BlockTemplate {
 interface VisualNode extends ModelNode { data: Record<string, any>; }
 interface Connection { id: string; source: string; target: string; }
 interface ModelData {
-  id: string;
+  id: string;          // 前端使用的ID（格式：server_{db_id} 或 local_*）
+  arch_id?: number;    // 数据库中的架构ID
   name: string;
   version: string;
   status: string;
@@ -93,7 +94,7 @@ interface ModelData {
   updated: string;
   nodes: VisualNode[];
   connections: Connection[];
-  filename?: string; // 服务器文件名（可选）
+  filename?: string;   // 服务器文件名（保留用于兼容）
 }
 
 
@@ -194,7 +195,8 @@ const ModelBuilder: React.FC = () => {
         const data = await response.json();
         // 将服务器架构转换为 ModelData 格式
         const serverModels: ModelData[] = (data.architectures || []).map((arch: any) => ({
-          id: `server_${arch.filename}`,
+          id: `server_${arch.id}`,
+          arch_id: arch.id,          // 数据库ID
           name: arch.name,
           version: arch.version,
           status: 'Ready',
@@ -202,7 +204,7 @@ const ModelBuilder: React.FC = () => {
           nodes: [], // 节点数据按需加载
           connections: [], // 连接数据按需加载
           updated: new Date(arch.updated).toLocaleDateString(),
-          filename: arch.filename, // 保存服务器文件名
+          filename: arch.file_name,  // 文件名（保留用于兼容）
         }));
         setModels(serverModels);
       }
@@ -714,7 +716,7 @@ const ModelBuilder: React.FC = () => {
 
   // --- ACTIONS ---
 
-  const handleDeleteModel = (id: string, filename: string, e: React.MouseEvent) => {
+  const handleDeleteModel = (id: string, arch_id: number | undefined, e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
     // Open Dialog instead of window.confirm
@@ -724,7 +726,7 @@ const ModelBuilder: React.FC = () => {
         title: '删除模型',
         message: '确定要删除该模型吗？此操作不可恢复。',
         action: 'delete_model',
-        data: { id, filename }  // 传递 id 和 filename
+        data: { id, arch_id }  // 传递 id 和 arch_id
     });
   };
 
@@ -884,11 +886,11 @@ const ModelBuilder: React.FC = () => {
   const handleDialogConfirm = async (val?: string) => {
       // 1. DELETE MODEL
       if (dialog.action === 'delete_model' && dialog.data) {
-          const { id, filename } = dialog.data;
-          // 如果有 filename，从服务器删除
-          if (filename) {
+          const { id, arch_id } = dialog.data;
+          // 如果有 arch_id，从服务器删除
+          if (arch_id) {
               try {
-                  const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1'}/models/architectures/${filename}`, {
+                  const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1'}/models/architectures/${arch_id}`, {
                       method: 'DELETE',
                       headers: {
                           'Authorization': `Bearer ${localStorage.getItem('access_token')}`,
@@ -1004,13 +1006,13 @@ const ModelBuilder: React.FC = () => {
   };
 
   const handleEditModel = async (model: ModelData) => {
-    // 保存原始文件名（用于保存时更新原文件）
-    setOriginalFilename(model.filename || null);
+    // 保存原始arch_id（用于保存时更新）
+    setOriginalFilename(model.arch_id ? String(model.arch_id) : null);
 
     // 如果是服务器模型，从服务器获取完整数据
-    if (model.filename) {
+    if (model.arch_id) {
       try {
-        const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1'}/models/architectures/${model.filename}`, {
+        const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1'}/models/architectures/${model.arch_id}`, {
           headers: {
             'Authorization': `Bearer ${localStorage.getItem('access_token')}`,
           },
@@ -1072,11 +1074,12 @@ const ModelBuilder: React.FC = () => {
         connections: connections
       };
 
-      // 构建请求URL：另存为时不指定原文件名，后端根据name生成新文件
-      // 普通保存且有原文件名时，指定目标文件名更新原文件
+      // 构建请求URL：另存为时不指定目标ID，后端根据name生成新记录
+      // 普通保存且有arch_id时，指定target_id更新原记录
       let url = `${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1'}/models/architectures?overwrite=true`;
       if (!asNew && originalFilename) {
-        url += `&target_filename=${encodeURIComponent(originalFilename)}`;
+        // originalFilename现在存储的是arch_id的字符串形式
+        url += `&target_id=${encodeURIComponent(originalFilename)}`;
       }
 
       const response = await fetch(url, {
@@ -1093,10 +1096,10 @@ const ModelBuilder: React.FC = () => {
         const message = result.updated ? '模型已更新' : `已保存: ${result.filename}`;
         showNotification(message, 'success');
 
-        // 更新原始文件名（后续保存会更新这个文件）
+        // 更新originalFilename（后续保存会更新这个记录）
         if (!asNew && !originalFilename) {
-          // 新建模型首次保存
-          setOriginalFilename(result.filename);
+          // 新建模型首次保存，保存返回的ID
+          setOriginalFilename(String(result.id));
         }
 
         // 刷新服务器架构列表
@@ -1397,7 +1400,7 @@ const ModelBuilder: React.FC = () => {
                         {models.map(model => (
                         <div key={model.id} onClick={() => handleEditModel(model)} className="glass-panel p-5 rounded-xl border border-slate-800 hover:border-cyan-500/50 hover:bg-slate-900/80 transition-all group flex flex-col cursor-pointer relative overflow-hidden">
                             <button
-                                onClick={(e) => handleDeleteModel(model.id, model.filename || '', e)}
+                                onClick={(e) => handleDeleteModel(model.id, model.arch_id, e)}
                                 className="absolute top-4 right-4 p-2 text-slate-500 hover:text-rose-400 bg-slate-900/50 hover:bg-slate-900 rounded-full transition-all z-20 opacity-0 group-hover:opacity-100"
                                 title="删除模型"
                             >
