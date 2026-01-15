@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import { ModelNode, WeightCheckpoint } from '../types';
 import modelsAPI from '../src/services/models';
+import { weightService, TaskType } from '../src/services/weights';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from 'recharts';
 import CodePreviewModal from './CodePreviewModal';
 
@@ -286,6 +287,9 @@ const ModelBuilder: React.FC = () => {
   // 当前预览的文件名（用于library模式下的删除操作）
   const [currentPreviewFilename, setCurrentPreviewFilename] = useState<string | null>(null);
   const [currentPreviewFileId, setCurrentPreviewFileId] = useState<number | null>(null);
+
+  // Weight Upload Dialog State
+  const [showWeightUpload, setShowWeightUpload] = useState(false);
 
   // Node Expansion State (折叠式卡片)
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
@@ -1819,7 +1823,7 @@ const ModelBuilder: React.FC = () => {
                             <h2 className="text-2xl font-bold text-white mb-2">权重库</h2>
                             <p className="text-slate-400 text-sm">管理已训练的模型权重文件 (Checkpoints)。</p>
                         </div>
-                        <button onClick={() => showNotification("功能开发中: 导入权重", "info")} className="px-6 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold rounded-xl border border-slate-700 flex items-center transition-all">
+                        <button onClick={() => setShowWeightUpload(true)} className="px-6 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold rounded-xl border border-slate-700 flex items-center transition-all">
                             <Upload size={18} className="mr-2" /> 导入权重
                         </button>
                     </div>
@@ -2011,6 +2015,306 @@ const ModelBuilder: React.FC = () => {
           onDelete={codePreviewSource === 'library' ? handleDeleteCurrentPreview : undefined}
           showNotification={showNotification}
         />
+
+        {/* Weight Upload Dialog */}
+        <WeightUploadDialog
+          isOpen={showWeightUpload}
+          onClose={() => setShowWeightUpload(false)}
+          onUploadComplete={() => {
+            setShowWeightUpload(false);
+            loadServerWeights();
+          }}
+          showNotification={showNotification}
+        />
+    </div>
+  );
+};
+
+// ==============================
+// Weight Upload Dialog Component
+// ==============================
+
+interface WeightUploadDialogProps {
+  isOpen: boolean;
+  onClose: () => void;
+  onUploadComplete: () => void;
+  showNotification: (msg: string, type: 'error' | 'success' | 'info') => void;
+}
+
+const WeightUploadDialog: React.FC<WeightUploadDialogProps> = ({
+  isOpen,
+  onClose,
+  onUploadComplete,
+  showNotification
+}) => {
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [weightName, setWeightName] = useState('');
+  const [taskType, setTaskType] = useState<TaskType>('auto');
+  const [description, setDescription] = useState('');
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [error, setError] = useState('');
+
+  // 支持的文件格式
+  const supportedFormats = ['.pt', '.pth', '.pkl', '.onnx'];
+  const maxSize = 500 * 1024 * 1024; // 500MB
+
+  // 重置表单
+  const resetForm = () => {
+    setWeightName('');
+    setTaskType('auto');
+    setDescription('');
+    setSelectedFile(null);
+    setUploadProgress(0);
+    setError('');
+  };
+
+  // 处理文件选择
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // 验证文件格式
+    const isValidFormat = supportedFormats.some(fmt =>
+      file.name.toLowerCase().endsWith(fmt)
+    );
+    if (!isValidFormat) {
+      setError(`不支持的文件格式。支持的格式: ${supportedFormats.join(', ')}`);
+      setSelectedFile(null);
+      return;
+    }
+
+    // 验证文件大小
+    if (file.size > maxSize) {
+      setError('文件大小超过500MB限制');
+      setSelectedFile(null);
+      return;
+    }
+
+    setError('');
+    setSelectedFile(file);
+
+    // 自动填充权重名称（从文件名提取，去除扩展名）
+    const nameWithoutExt = file.name.replace(/\.(pt|pth|pkl|onnx)$/i, '');
+    setWeightName(nameWithoutExt);
+
+    // 根据文件扩展名自动检测框架
+    if (file.name.toLowerCase().endsWith('.onnx')) {
+      // ONNX通常是检测模型
+      if (taskType === 'auto') {
+        setTaskType('detection');
+      }
+    }
+  };
+
+  // 处理上传
+  const handleUpload = async () => {
+    if (!selectedFile) {
+      setError('请选择权重文件');
+      return;
+    }
+
+    if (!weightName.trim()) {
+      setError('请输入权重名称');
+      return;
+    }
+
+    setIsUploading(true);
+    setError('');
+    setUploadProgress(0);
+
+    try {
+      await weightService.uploadWeight(
+        {
+          file: selectedFile,
+          name: weightName.trim(),
+          task_type: taskType,
+          description: description.trim() || undefined
+        },
+        (progress) => setUploadProgress(progress)
+      );
+
+      // 上传成功
+      showNotification('权重文件上传成功', 'success');
+      onUploadComplete();
+      resetForm();
+    } catch (err: any) {
+      setError(err.message || '上传失败，请重试');
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  // 弹窗关闭时重置
+  useEffect(() => {
+    if (!isOpen) {
+      resetForm();
+    }
+  }, [isOpen]);
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 z-[150] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+      <div className="bg-slate-900 border border-slate-700 p-6 rounded-xl w-full max-w-md shadow-2xl animate-in fade-in zoom-in duration-200">
+        {/* Header */}
+        <div className="flex items-center mb-6">
+          <div className="w-12 h-12 rounded-full flex items-center justify-center bg-emerald-900/30 text-emerald-500 mr-4">
+            <HardDrive size={24} />
+          </div>
+          <div>
+            <h3 className="text-xl font-bold text-white">导入权重</h3>
+            <p className="text-sm text-slate-400">上传训练好的模型权重文件</p>
+          </div>
+        </div>
+
+        {/* Form */}
+        <div className="space-y-4 mb-6">
+          {/* 文件选择 */}
+          <div>
+            <label className="block text-sm font-medium text-slate-300 mb-2">
+              权重文件 <span className="text-red-500">*</span>
+            </label>
+            <div className="relative">
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept={supportedFormats.join(',')}
+                onChange={handleFileSelect}
+                className="hidden"
+                disabled={isUploading}
+              />
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                disabled={isUploading}
+                className="w-full px-4 py-3 bg-slate-950 border border-slate-700 rounded-lg text-left text-slate-400 hover:border-emerald-500 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {selectedFile ? (
+                  <div className="flex items-center">
+                    <CheckCircle size={18} className="text-emerald-500 mr-2" />
+                    <span className="text-white truncate">{selectedFile.name}</span>
+                    <span className="text-slate-500 text-xs ml-auto">
+                      {(selectedFile.size / 1024 / 1024).toFixed(2)} MB
+                    </span>
+                  </div>
+                ) : (
+                  <div className="flex items-center">
+                    <Upload size={18} className="mr-2" />
+                    <span>选择权重文件</span>
+                  </div>
+                )}
+              </button>
+            </div>
+            <p className="text-xs text-slate-500 mt-1">
+              支持格式: {supportedFormats.join(', ')} | 最大500MB
+            </p>
+          </div>
+
+          {/* 权重名称 */}
+          <div>
+            <label className="block text-sm font-medium text-slate-300 mb-2">
+              权重名称 <span className="text-red-500">*</span>
+            </label>
+            <input
+              type="text"
+              value={weightName}
+              onChange={(e) => setWeightName(e.target.value)}
+              placeholder="输入权重名称"
+              disabled={isUploading}
+              className="w-full px-4 py-2 bg-slate-950 border border-slate-700 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 disabled:opacity-50"
+            />
+          </div>
+
+          {/* 任务类型 */}
+          <div>
+            <label className="block text-sm font-medium text-slate-300 mb-2">
+              任务类型 <span className="text-red-500">*</span>
+            </label>
+            <select
+              value={taskType}
+              onChange={(e) => setTaskType(e.target.value as TaskType)}
+              disabled={isUploading}
+              className="w-full px-4 py-2 bg-slate-950 border border-slate-700 rounded-lg text-white focus:outline-none focus:border-emerald-500 disabled:opacity-50"
+            >
+              <option value="auto">自动检测</option>
+              <option value="classification">分类 (Classification)</option>
+              <option value="detection">检测 (Detection)</option>
+              <option value="segmentation">分割 (Segmentation)</option>
+            </select>
+            <p className="text-xs text-slate-500 mt-1">
+              {taskType === 'auto' ? '系统将根据模型结构自动检测任务类型' : ''}
+            </p>
+          </div>
+
+          {/* 描述 */}
+          <div>
+            <label className="block text-sm font-medium text-slate-300 mb-2">
+              描述
+            </label>
+            <textarea
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="输入权重描述（可选）"
+              rows={2}
+              disabled={isUploading}
+              className="w-full px-4 py-2 bg-slate-950 border border-slate-700 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 disabled:opacity-50 resize-none"
+            />
+          </div>
+
+          {/* 上传进度 */}
+          {isUploading && (
+            <div>
+              <div className="flex justify-between text-xs text-slate-400 mb-1">
+                <span>上传中...</span>
+                <span>{uploadProgress}%</span>
+              </div>
+              <div className="w-full bg-slate-800 rounded-full h-2 overflow-hidden">
+                <div
+                  className="bg-gradient-to-r from-emerald-500 to-cyan-500 h-full transition-all duration-300"
+                  style={{ width: `${uploadProgress}%` }}
+                />
+              </div>
+            </div>
+          )}
+
+          {/* 错误提示 */}
+          {error && (
+            <div className="p-3 bg-rose-900/20 border border-rose-800 rounded-lg flex items-start">
+              <AlertTriangle size={16} className="text-rose-500 mr-2 mt-0.5 flex-shrink-0" />
+              <span className="text-sm text-rose-400">{error}</span>
+            </div>
+          )}
+        </div>
+
+        {/* Footer Buttons */}
+        <div className="flex justify-end space-x-3">
+          <button
+            onClick={onClose}
+            disabled={isUploading}
+            className="px-4 py-2 text-slate-300 hover:text-white hover:bg-slate-800 rounded-lg transition-colors disabled:opacity-50"
+          >
+            取消
+          </button>
+          <button
+            onClick={handleUpload}
+            disabled={isUploading || !selectedFile}
+            className="px-6 py-2 bg-gradient-to-r from-emerald-600 to-cyan-600 hover:from-emerald-500 hover:to-cyan-500 text-white font-medium rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center"
+          >
+            {isUploading ? (
+              <>
+                <Loader2 size={18} className="mr-2 animate-spin" />
+                上传中
+              </>
+            ) : (
+              <>
+                <Upload size={18} className="mr-2" />
+                上传
+              </>
+            )}
+          </button>
+        </div>
+      </div>
     </div>
   );
 };
