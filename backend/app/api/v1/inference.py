@@ -3,6 +3,7 @@
 提供单图推理、批量推理和任务管理功能
 """
 
+from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy.orm import Session
 from typing import Dict, Any, List, Optional
@@ -10,6 +11,7 @@ from loguru import logger
 
 from app.database import get_db
 from app.models.inference import InferenceJob
+from app.models.weight_library import WeightLibrary
 from app.schemas.inference import (
     InferencePredictRequest,
     InferencePredictResponse,
@@ -78,36 +80,55 @@ async def predict_inference(
     单图推理API
 
     功能：
-    - 加载指定模型
+    - 从权重库加载指定权重
     - 执行推理
     - 返回检测结果和性能指标
     """
     try:
         logger.bind(component="inference_api").info(
-            f"收到单图推理请求: model_id={request.model_id}, "
+            f"收到单图推理请求: weight_id={request.weight_id}, "
             f"image={request.image_path}"
         )
+
+        # 从权重库查询权重信息
+        weight = db.query(WeightLibrary).filter(
+            WeightLibrary.id == request.weight_id
+        ).first()
+
+        if not weight:
+            raise HTTPException(
+                status_code=404,
+                detail=f"权重不存在: weight_id={request.weight_id}"
+            )
+
+        # 检查权重文件是否存在
+        weight_path = Path(weight.file_path)
+        if not weight_path.exists():
+            raise HTTPException(
+                status_code=404,
+                detail=f"权重文件不存在: {weight.file_path}"
+            )
 
         # 获取模型加载器
         loader = get_model_loader()
 
-        # TODO: 根据model_id从数据库获取模型路径
-        # 这里先使用一个模拟的路径
-        model_path = f"data/models/model_{request.model_id}.pt"
-
-        # 加载模型
+        # 使用权重路径加载模型
         model_data = loader.load_model(
-            model_path,
+            str(weight_path),
             device=request.device
         )
 
-        # 创建推理执行器
+        # 准备配置参数
         config = {
-            'target_size': 640
+            'target_size': weight.input_size if weight.input_size else [640, 640]
         }
+
+        # 创建推理执行器（传入任务类型和类别名称）
         executor = InferenceExecutor(
             model=model_data['model'],
             model_type=model_data['type'],
+            task_type=weight.task_type,
+            class_names=weight.class_names,
             device=model_data['device'],
             config=config
         )
@@ -121,12 +142,15 @@ async def predict_inference(
 
         # 构建响应
         return InferencePredictResponse(
+            task_type=weight.task_type,
             results=result['results'],
             metrics=InferenceMetrics(**result['metrics']),
             image_path=request.image_path,
-            model_id=request.model_id
+            weight_id=request.weight_id
         )
 
+    except HTTPException:
+        raise
     except FileNotFoundError as e:
         logger.error(f"模型或图像文件未找到: {e}")
         raise HTTPException(status_code=404, detail=str(e))
@@ -155,15 +179,26 @@ async def batch_inference(
     """
     try:
         logger.bind(component="inference_api").info(
-            f"收到批量推理请求: model_id={request.model_id}, "
+            f"收到批量推理请求: weight_id={request.weight_id}, "
             f"images={len(request.image_paths)}, "
             f"output_dir={request.output_dir}"
         )
 
+        # 验证权重是否存在
+        weight = db.query(WeightLibrary).filter(
+            WeightLibrary.id == request.weight_id
+        ).first()
+
+        if not weight:
+            raise HTTPException(
+                status_code=404,
+                detail=f"权重不存在: weight_id={request.weight_id}"
+            )
+
         # 创建推理任务记录
         job = InferenceJob(
-            name=f"批量推理_{request.model_id}",
-            model_id=request.model_id,
+            name=f"批量推理_{weight.name}",
+            model_id=request.weight_id,  # 存储weight_id到model_id字段
             input_path=",".join(request.image_paths),
             output_path=request.output_dir,
             inference_type="batch",
@@ -193,6 +228,8 @@ async def batch_inference(
             message="批量推理任务已创建，正在处理中"
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.bind(component="inference_api").error(f"创建批量推理任务失败: {e}")
         raise HTTPException(status_code=500, detail=f"创建任务失败: {str(e)}")
@@ -554,4 +591,117 @@ async def download_inference_results(
     except Exception as e:
         logger.bind(component="inference_api").error(f"下载推理结果失败: {e}")
         raise HTTPException(status_code=500, detail=f"下载推理结果失败: {str(e)}")
+
+
+@router.post(
+    "/predict-image",
+    response_model=InferencePredictResponse,
+    summary="图片上传+推理一体化",
+    description="上传图片并直接返回推理结果"
+)
+async def predict_image_inference(
+    weight_id: int,
+    image: UploadFile = File(...),
+    confidence_threshold: float = 0.5,
+    iou_threshold: float = 0.45,
+    top_k: int = 5,
+    device: Optional[str] = None,
+    db: Session = Depends(get_db)
+) -> InferencePredictResponse:
+    """
+    图片上传+推理一体化API
+
+    功能：
+    - 接收上传的图片文件
+    - 保存到临时目录
+    - 执行推理
+    - 返回推理结果
+    """
+    import uuid
+    from fastapi.responses import FileResponse
+
+    try:
+        logger.bind(component="inference_api").info(
+            f"收到图片推理请求: weight_id={weight_id}, "
+            f"image={image.filename}"
+        )
+
+        # 从权重库查询权重信息
+        weight = db.query(WeightLibrary).filter(
+            WeightLibrary.id == weight_id
+        ).first()
+
+        if not weight:
+            raise HTTPException(
+                status_code=404,
+                detail=f"权重不存在: weight_id={weight_id}"
+            )
+
+        # 检查权重文件是否存在
+        weight_path = Path(weight.file_path)
+        if not weight_path.exists():
+            raise HTTPException(
+                status_code=404,
+                detail=f"权重文件不存在: {weight.file_path}"
+            )
+
+        # 保存上传的图片到临时目录
+        upload_dir = Path("data/uploads")
+        upload_dir.mkdir(parents=True, exist_ok=True)
+
+        # 生成唯一文件名
+        file_ext = Path(image.filename).suffix if image.filename else '.jpg'
+        unique_filename = f"{uuid.uuid4()}{file_ext}"
+        image_path = upload_dir / unique_filename
+
+        # 保存文件
+        with open(image_path, "wb") as buffer:
+            import shutil
+            shutil.copyfileobj(image.file, buffer)
+
+        # 获取模型加载器
+        loader = get_model_loader()
+
+        # 使用权重路径加载模型
+        model_data = loader.load_model(
+            str(weight_path),
+            device=device
+        )
+
+        # 准备配置参数
+        config = {
+            'target_size': weight.input_size if weight.input_size else [640, 640]
+        }
+
+        # 创建推理执行器
+        executor = InferenceExecutor(
+            model=model_data['model'],
+            model_type=model_data['type'],
+            task_type=weight.task_type,
+            class_names=weight.class_names,
+            device=model_data['device'],
+            config=config
+        )
+
+        # 执行推理
+        result = await executor.infer_single_image(
+            str(image_path),
+            confidence_threshold,
+            iou_threshold
+        )
+
+        # 构建响应
+        return InferencePredictResponse(
+            task_type=weight.task_type,
+            results=result['results'],
+            metrics=InferenceMetrics(**result['metrics']),
+            image_path=str(image_path),
+            weight_id=weight_id
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.bind(component="inference_api").error(f"图片推理失败: {e}")
+        raise HTTPException(status_code=500, detail=f"图片推理失败: {str(e)}")
 

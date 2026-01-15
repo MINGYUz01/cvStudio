@@ -186,7 +186,8 @@ export interface BatchInferenceResponse {
  * 推理服务类
  */
 class InferenceServiceClass {
-  private baseUrl = '/inference';
+  private weightsUrl = '/weights';
+  private inferenceUrl = '/inference';
 
   // ==================== 权重库管理 ====================
 
@@ -204,11 +205,11 @@ class InferenceServiceClass {
       params.task_type = taskType;
     }
 
-    // 后端直接返回数组，不是 { data: [] } 格式
-    const response = await apiClient.get<WeightLibrary[]>(`${this.baseUrl}/weights`, { params });
+    // 后端返回格式: { weights: [...], total: number }
+    const response = await apiClient.get<{ weights: WeightLibrary[], total: number }>(`${this.weightsUrl}`, { params });
 
-    // 确保返回数组，如果出错或返回undefined则返回空数组
-    return Array.isArray(response) ? response : [];
+    // 从响应中提取权重数组
+    return response?.weights || [];
   }
 
   /**
@@ -218,7 +219,7 @@ class InferenceServiceClass {
    */
   async getWeight(weightId: number): Promise<WeightLibrary> {
     // 后端直接返回对象，不是 { data: {} } 格式
-    const response = await apiClient.get<WeightLibrary>(`${this.baseUrl}/weights/${weightId}`);
+    const response = await apiClient.get<WeightLibrary>(`${this.weightsUrl}/${weightId}`);
     return response;
   }
 
@@ -259,7 +260,7 @@ class InferenceServiceClass {
       const xhr = new XMLHttpRequest();
 
       // 构建完整的请求URL
-      const requestUrl = `${baseUrl}${this.baseUrl}/weights/upload`;
+      const requestUrl = `${baseUrl}${this.weightsUrl}/upload`;
       console.log('[上传权重] 请求URL:', requestUrl);
       console.log('[上传权重] 文件名:', file.name, '大小:', file.size);
 
@@ -317,7 +318,7 @@ class InferenceServiceClass {
     await apiClient.delete<{
       success: boolean;
       message: string;
-    }>(`${this.baseUrl}/weights/${weightId}`);
+    }>(`${this.weightsUrl}/${weightId}`);
   }
 
   /**
@@ -327,7 +328,7 @@ class InferenceServiceClass {
    */
   async getWeightVersions(weightId: number): Promise<WeightVersionHistory> {
     const response = await apiClient.get<WeightVersionHistory>(
-      `${this.baseUrl}/weights/${weightId}/versions`
+      `${this.weightsUrl}/${weightId}/versions`
     );
     return response;
   }
@@ -386,7 +387,7 @@ class InferenceServiceClass {
         reject(new Error('网络错误，创建版本失败'));
       });
 
-      xhr.open('POST', `${apiClient['baseURL']}${this.baseUrl}/weights/${weightId}/version`);
+      xhr.open('POST', `${apiClient['baseURL']}${this.weightsUrl}/${weightId}/version`);
       xhr.setRequestHeader('Authorization', `Bearer ${token}`);
       xhr.send(formData);
     });
@@ -439,7 +440,7 @@ class InferenceServiceClass {
         reject(new Error('网络错误，检测失败'));
       });
 
-      xhr.open('POST', `${apiClient['baseURL']}${this.baseUrl}/weights/detect-type`);
+      xhr.open('POST', `${apiClient['baseURL']}${this.weightsUrl}/detect-type`);
       xhr.setRequestHeader('Authorization', `Bearer ${token}`);
       xhr.send(formData);
     });
@@ -455,7 +456,7 @@ class InferenceServiceClass {
   async predict(request: WeightInferenceRequest): Promise<InferencePredictResponse> {
     // 后端直接返回对象
     const response = await apiClient.post<InferencePredictResponse>(
-      `${this.baseUrl}/weights/${request.weight_id}/predict`, request
+      `${this.inferenceUrl}/predict`, request
     );
     return response;
   }
@@ -467,7 +468,7 @@ class InferenceServiceClass {
    */
   async predictBatch(request: BatchInferenceRequest): Promise<BatchInferenceResponse> {
     const response = await apiClient.post<BatchInferenceResponse>(
-      `${this.baseUrl}/weights/${request.weight_id}/predict-batch`, request
+      `${this.inferenceUrl}/batch`, request
     );
     return response;
   }
@@ -492,6 +493,8 @@ class InferenceServiceClass {
     onProgress?: (progress: number) => void
   ): Promise<InferencePredictResponse> {
     const formData = new FormData();
+    // 必须先添加 weight_id，后端需要它
+    formData.append('weight_id', String(weightId));
     formData.append('image', file);
     if (options?.confidence_threshold !== undefined) {
       formData.append('confidence_threshold', String(options.confidence_threshold));
@@ -540,7 +543,7 @@ class InferenceServiceClass {
         reject(new Error('网络错误，推理失败'));
       });
 
-      xhr.open('POST', `${apiClient['baseURL']}${this.baseUrl}/weights/${weightId}/predict-image`);
+      xhr.open('POST', `${apiClient['baseURL']}${this.inferenceUrl}/predict-image`);
       xhr.setRequestHeader('Authorization', `Bearer ${token}`);
       xhr.send(formData);
     });
@@ -564,7 +567,7 @@ class InferenceServiceClass {
       processed: number;
       total: number;
       progress: number;
-    }>(`${this.baseUrl}/jobs/${jobId}`);
+    }>(`${this.inferenceUrl}/jobs/${jobId}`);
     return response;
   }
 
@@ -575,7 +578,7 @@ class InferenceServiceClass {
    */
   async getBatchResults(jobId: number): Promise<InferencePredictResponse[]> {
     const response = await apiClient.get<InferencePredictResponse[]>(
-      `${this.baseUrl}/jobs/${jobId}/results`
+      `${this.inferenceUrl}/jobs/${jobId}/results`
     );
     // 确保返回数组
     return Array.isArray(response) ? response : [];

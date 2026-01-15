@@ -120,19 +120,21 @@ class InferenceJobResponse(BaseModel):
 class InferencePredictRequest(BaseModel):
     """单图推理请求"""
 
-    model_id: int = Field(..., description="模型ID")
+    weight_id: int = Field(..., description="权重ID")
     image_path: str = Field(..., description="图像路径")
     confidence_threshold: float = Field(default=0.5, description="置信度阈值", ge=0.0, le=1.0)
     iou_threshold: float = Field(default=0.45, description="IOU阈值", ge=0.0, le=1.0)
+    top_k: Optional[int] = Field(default=5, description="分类任务时返回Top-K结果", ge=1, le=100)
     device: Optional[str] = Field(None, description="推理设备：auto/cuda/cpu")
 
     class Config:
         json_schema_extra = {
             "example": {
-                "model_id": 1,
+                "weight_id": 1,
                 "image_path": "data/test_images/test_001.jpg",
                 "confidence_threshold": 0.5,
                 "iou_threshold": 0.45,
+                "top_k": 5,
                 "device": "auto"
             }
         }
@@ -202,14 +204,16 @@ class InferenceMetrics(BaseModel):
 class InferencePredictResponse(BaseModel):
     """推理结果响应"""
 
+    task_type: str = Field(..., description="任务类型：classification/detection/segmentation")
     results: List[Dict[str, Any]] = Field(..., description="推理结果列表")
     metrics: InferenceMetrics = Field(..., description="性能指标")
     image_path: str = Field(..., description="输入图像路径")
-    model_id: int = Field(..., description="使用的模型ID")
+    weight_id: int = Field(..., description="使用的权重ID")
 
     class Config:
         json_schema_extra = {
             "example": {
+                "task_type": "detection",
                 "results": [
                     {
                         "bbox": [100.5, 150.2, 300.8, 400.3],
@@ -231,7 +235,7 @@ class InferencePredictResponse(BaseModel):
                     "image_size": [640, 480]
                 },
                 "image_path": "data/test_images/test_001.jpg",
-                "model_id": 1
+                "weight_id": 1
             }
         }
 
@@ -239,7 +243,7 @@ class InferencePredictResponse(BaseModel):
 class InferenceBatchRequest(BaseModel):
     """批量推理请求"""
 
-    model_id: int = Field(..., description="模型ID")
+    weight_id: int = Field(..., description="权重ID")
     image_paths: List[str] = Field(..., description="图像路径列表")
     output_dir: str = Field(..., description="输出目录")
     batch_size: int = Field(default=8, description="batch size", ge=1, le=64)
@@ -256,7 +260,7 @@ class InferenceBatchRequest(BaseModel):
     class Config:
         json_schema_extra = {
             "example": {
-                "model_id": 1,
+                "weight_id": 1,
                 "image_paths": [
                     "data/test_images/img1.jpg",
                     "data/test_images/img2.jpg"
