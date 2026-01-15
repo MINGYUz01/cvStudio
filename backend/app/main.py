@@ -3,6 +3,13 @@ CV Studio - 计算机视觉任务管理平台
 FastAPI主应用入口
 """
 
+import logging
+
+# 抑制 websockets 库的 keepalive 调试日志
+logging.getLogger("websockets").setLevel(logging.INFO)
+logging.getLogger("websockets.server").setLevel(logging.INFO)
+logging.getLogger("websockets.protocol").setLevel(logging.INFO)
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware

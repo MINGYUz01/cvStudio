@@ -46,10 +46,97 @@ import {
   AreaChart,
   Area
 } from 'recharts';
-import { useTraining } from '../src/hooks/useTraining';
 import { useTrainingLogsWS, LogEntry, MetricsEntry } from '../hooks/useWebSocket';
 
 // --- Types & Mock Data ---
+
+// 初始实验数据（模拟数据）
+const INITIAL_EXPERIMENTS: Experiment[] = [
+  {
+    id: '1',
+    name: 'YOLOv8-Traffic-FineTune',
+    task: 'detection',
+    model: 'YOLOv8',
+    dataset: 'Urban_Traffic_V2',
+    augmentation: 'YOLO Default Train',
+    status: 'completed',
+    duration: '2h 15m',
+    accuracy: '78.5',
+    startedAt: '2 hours ago',
+    config: {
+      batch_size: 16,
+      epochs: 100,
+      learning_rate: 0.0003,
+      optimizer: 'AdamW',
+      input_size: 640,
+    }
+  },
+  {
+    id: '2',
+    name: 'ResNet50-MRI-Classification',
+    task: 'classification',
+    model: 'ResNet50',
+    dataset: 'Medical_MRI',
+    augmentation: 'Medical MRI Cleaner',
+    status: 'running',
+    duration: '45m',
+    accuracy: '92.3',
+    startedAt: '45 minutes ago',
+    config: {
+      batch_size: 32,
+      epochs: 50,
+      learning_rate: 0.001,
+      optimizer: 'Adam',
+      input_size: 224,
+    }
+  },
+  {
+    id: '3',
+    name: 'UNet-RoadSegmentation-v1',
+    task: 'segmentation',
+    model: 'UNet',
+    dataset: 'Urban_Traffic_V2',
+    augmentation: 'Weather Robustness',
+    status: 'failed',
+    duration: '1h 30m',
+    accuracy: '0.00',
+    startedAt: '3 hours ago',
+    config: {
+      batch_size: 8,
+      epochs: 100,
+      learning_rate: 0.0001,
+      optimizer: 'AdamW',
+      input_size: 512,
+    }
+  },
+  {
+    id: '4',
+    name: 'YOLOv5-COCO-Pretrain',
+    task: 'detection',
+    model: 'YOLOv5',
+    dataset: 'COCO_2017',
+    augmentation: 'No Augmentation',
+    status: 'queued',
+    duration: '0s',
+    accuracy: '0.00',
+    startedAt: 'Just now',
+    config: {
+      batch_size: 64,
+      epochs: 300,
+      learning_rate: 0.01,
+      optimizer: 'SGD',
+      input_size: 640,
+    }
+  },
+];
+
+// 训练图表数据（模拟数据）
+const TRAINING_CHART_DATA = Array.from({ length: 50 }, (_, i) => ({
+  epoch: i + 1,
+  trainLoss: Math.max(0.1, 2.5 * Math.exp(-i * 0.05) + Math.random() * 0.3),
+  valLoss: Math.max(0.15, 2.8 * Math.exp(-i * 0.045) + Math.random() * 0.4),
+  metric: Math.min(0.95, 0.3 + i * 0.012 + Math.random() * 0.05),
+}));
 
 type TaskType = 'detection' | 'classification' | 'segmentation';
 type ExpStatus = 'running' | 'completed' | 'failed' | 'queued' | 'paused';
@@ -365,8 +452,12 @@ const TrainingMonitor: React.FC = () => {
       setTimeout(() => setNotification(null), 3000);
   };
 
-  // WebSocket连接：当查看特定实验详情时连接
-  const shouldConnectWS = view === 'detail' && selectedExpId !== null;
+  // 获取当前选中实验的状态
+  const selectedExp = experiments.find(e => e.id === selectedExpId);
+  const isExpRunning = selectedExp?.status === 'running' || selectedExp?.status === 'paused';
+
+  // WebSocket连接：只对正在运行的实验建立连接
+  const shouldConnectWS = view === 'detail' && selectedExpId !== null && isExpRunning;
   const { connected, disconnect } = useTrainingLogsWS(
     shouldConnectWS ? selectedExpId! : '',
     {

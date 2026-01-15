@@ -91,6 +91,7 @@ interface UseWebSocketOptions {
   onError?: (error: Event) => void;
   reconnectInterval?: number; // 重连间隔（毫秒）
   maxReconnectAttempts?: number; // 最大重连次数
+  enabled?: boolean; // 是否启用连接，默认true
 }
 
 // WebSocket Hook返回值
@@ -120,6 +121,7 @@ export const useWebSocket = (
     onError,
     reconnectInterval = 3000,
     maxReconnectAttempts = 10,
+    enabled = true,
   } = options;
 
   const [connected, setConnected] = useState(false);
@@ -141,6 +143,11 @@ export const useWebSocket = (
 
   // 连接WebSocket
   const connect = useCallback(() => {
+    // 如果未启用连接，直接返回
+    if (!enabled) {
+      return;
+    }
+
     if (socketRef.current?.readyState === WebSocket.OPEN) {
       return;
     }
@@ -227,7 +234,7 @@ export const useWebSocket = (
       setConnecting(false);
       console.error('创建WebSocket连接失败:', err);
     }
-  }, [url, reconnectInterval, maxReconnectAttempts, onMessage, onSystemStats, onLog, onMetrics, onStatusChange, onError]);
+  }, [url, reconnectInterval, maxReconnectAttempts, onMessage, onSystemStats, onLog, onMetrics, onStatusChange, onError, enabled]);
 
   // 手动发送消息
   const sendMessage = useCallback((message: any) => {
@@ -274,7 +281,7 @@ export const useWebSocket = (
     return () => {
       disconnect();
     };
-  }, [url]); // 只在URL变化时重新连接
+  }, [url, connect, disconnect]); // 在URL或connect变化时重新连接
 
   return {
     socket: socketRef.current,
@@ -299,6 +306,7 @@ export const useSystemStatsWS = (options?: UseWebSocketOptions) => {
 
 /**
  * 训练日志WebSocket Hook
+ * 当 experimentId 为空时不建立连接
  */
 export const useTrainingLogsWS = (
   experimentId: string,
@@ -307,6 +315,7 @@ export const useTrainingLogsWS = (
   const wsUrl = `ws://localhost:8000/api/v1/ws/training/${experimentId}?client_id=${Date.now()}`;
   return useWebSocket(wsUrl, {
     ...options,
+    enabled: !!experimentId, // experimentId 为空时不启用连接
   });
 };
 
