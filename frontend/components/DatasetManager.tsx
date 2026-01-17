@@ -1226,20 +1226,18 @@ const DatasetManager: React.FC = () => {
                        <Folder size={16} className={`${selectedDsId === ds.id ? 'text-cyan-400' : 'text-slate-500 group-hover:text-cyan-400 transition-colors'}`} />
                     </div>
                     <span className={`ml-2 text-sm font-medium truncate flex-1 transition-colors ${selectedDsId === ds.id ? 'text-white' : 'text-slate-200 group-hover:text-cyan-400'}`}>{ds.name}</span>
-                    {/* 查看描述按钮 */}
-                    {ds.description && (
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setDatasetToViewDescription(ds);
-                          setViewDescriptionDialogOpen(true);
-                        }}
-                        className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-cyan-900/30 text-slate-500 hover:text-cyan-400 transition-all"
-                        title="查看描述"
-                      >
-                        <FileText size={14} />
-                      </button>
-                    )}
+                    {/* 查看描述按钮 - 始终显示，支持添加/修改描述 */}
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setDatasetToViewDescription(ds);
+                        setViewDescriptionDialogOpen(true);
+                      }}
+                      className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-cyan-900/30 text-slate-500 hover:text-cyan-400 transition-all"
+                      title={ds.description ? "查看/编辑描述" : "添加描述"}
+                    >
+                      <FileText size={14} />
+                    </button>
                     {/* 删除按钮 */}
                     <button
                       onClick={(e) => handleOpenDeleteDialog(ds, e)}
