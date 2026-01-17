@@ -860,9 +860,11 @@ const DatasetManager: React.FC = () => {
       const selectedDataset = apiDatasets.find((ds: any) => ds.id === parseInt(selectedDsId));
       if (selectedDataset) {
         // 从元数据中获取图片路径，然后构建URL
+        // 添加缓存破坏参数，确保每次数据集变化时都重新加载图片
         const imagePaths = selectedDataset.meta?.image_paths || [];
+        const cacheBuster = selectedDataset.updated_at || selectedDataset.created_at || Date.now();
         const urls = imagePaths.map((_: string, index: number) =>
-          `${apiClient['baseURL']}/datasets/${selectedDataset.id}/image-file?index=${index}`
+          `${apiClient['baseURL']}/datasets/${selectedDataset.id}/image-file?index=${index}&_t=${cacheBuster}`
         );
         setImageUrls(urls);
       }

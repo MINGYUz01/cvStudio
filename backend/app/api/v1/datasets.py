@@ -921,12 +921,23 @@ async def get_dataset_image_file(
         if not image_full_path.exists():
             raise HTTPException(status_code=404, detail=f"图像文件不存在: {image_full_path}")
 
-        # 返回文件
+        # 返回文件，添加ETag用于缓存验证
+        import os
         from fastapi.responses import FileResponse
+
+        # 获取文件信息用于生成ETag
+        file_stat = os.stat(image_full_path)
+        etag_value = f'"{int(file_stat.st_mtime)}-{file_stat.st_size}"'
+
         return FileResponse(
             image_full_path,
             media_type="image/jpeg",
-            headers={"Cache-Control": "max-age=3600"}
+            headers={
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "Pragma": "no-cache",
+                "Expires": "0",
+                "ETag": etag_value
+            }
         )
     except HTTPException:
         raise
