@@ -194,11 +194,13 @@ class COCORecognizer:
         num_images = len(images)
 
         # 分析图像尺寸（抽样）
-        image_stats = self._analyze_images(images[:50])  # 最多分析50张图
+        image_stats = self._analyze_images(images[:100])  # 最多分析100张图
 
+        # 设置较大的限制，避免内存问题
+        max_paths = 10000
         return {
             "num_images": num_images,
-            "image_paths": [str(img) for img in images[:50]],  # 最多返回50个路径
+            "image_paths": [str(img) for img in images[:max_paths]],
             "image_directories": [str(d) for d in image_dirs],
             "image_stats": image_stats
         }

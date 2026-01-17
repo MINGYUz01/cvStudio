@@ -1,5 +1,6 @@
 """
 YOLO格式数据集识别器
+支持Darknet YOLO格式和Ultralytics YOLO格式
 """
 
 import os
@@ -7,14 +8,23 @@ import json
 from typing import Dict, List, Optional, Tuple
 from pathlib import Path
 
+try:
+    import yaml
+    YAML_AVAILABLE = True
+except ImportError:
+    YAML_AVAILABLE = False
+
 
 class YOLORecognizer:
     """YOLO格式数据集识别器"""
 
     def __init__(self):
-        self.required_files = ['obj.names', 'obj.data', 'train.txt']
-        self.required_image_extensions = {'.jpg', '.jpeg', '.png', '.bmp'}
+        self.required_image_extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.webp'}
         self.required_label_extensions = {'.txt'}
+        # Darknet YOLO风格文件
+        self.darknet_files = ['obj.names', 'obj.data', 'train.txt']
+        # Ultralytics YOLO风格文件
+        self.ultralytics_files = ['dataset.yaml', 'data.yaml', 'yolo.yaml']
 
     def recognize(self, dataset_path: str) -> Dict:
         """
@@ -34,23 +44,59 @@ class YOLORecognizer:
             "format": "yolo",
             "confidence": 0,
             "details": {},
-            "error": None
+            "error": None,
+            "yolo_variant": "unknown"  # 标识YOLO变体
         }
 
         try:
-            # 检查是否有obj.names文件（类别名称）
-            classes_file = self._find_classes_file(dataset_path)
-            classes = []
-            if classes_file and classes_file.exists():
-                classes = self._load_classes(classes_file)
-                result["details"]["classes"] = classes
+            # 检测YOLO变体类型
+            yolo_type, yaml_file = self._detect_yolo_type(dataset_path)
+            result["details"]["yolo_type"] = yolo_type
 
-            # 检查是否有obj.data文件（数据集配置）
-            data_file = self._find_data_file(dataset_path)
+            classes = []
             data_config = {}
-            if data_file and data_file.exists():
-                data_config = self._load_data_config(data_file)
-                result["details"]["data_config"] = data_config
+
+            if yolo_type == "ultralytics":
+                # Ultralytics YOLO格式（使用dataset.yaml）
+                result["yolo_variant"] = "ultralytics"
+
+                if yaml_file and YAML_AVAILABLE:
+                    classes, data_config = self._load_ultralytics_config(yaml_file)
+                    result["details"]["classes"] = classes
+                    result["details"]["data_config"] = data_config
+
+                    # 从yaml中提取类别名映射
+                    if "names" in data_config:
+                        names = data_config["names"]
+                        if isinstance(names, dict):
+                            # {0: "cat", 1: "dog"} 格式
+                            classes = [names.get(i, f"class_{i}") for i in sorted(names.keys())]
+                        elif isinstance(names, list):
+                            # ["cat", "dog"] 格式
+                            classes = names
+                        result["details"]["classes"] = classes
+
+                result["details"]["yaml_file"] = str(yaml_file) if yaml_file else None
+
+            elif yolo_type == "darknet":
+                # Darknet YOLO格式（使用obj.names, obj.data）
+                result["yolo_variant"] = "darknet"
+
+                # 检查是否有obj.names文件（类别名称）
+                classes_file = self._find_classes_file(dataset_path)
+                if classes_file and classes_file.exists():
+                    classes = self._load_classes(classes_file)
+                    result["details"]["classes"] = classes
+
+                # 检查是否有obj.data文件（数据集配置）
+                data_file = self._find_data_file(dataset_path)
+                if data_file and data_file.exists():
+                    data_config = self._load_data_config(data_file)
+                    result["details"]["data_config"] = data_config
+
+            # 检查标准YOLO目录结构（images/labels）
+            has_yolo_structure = self._check_yolo_structure(dataset_path)
+            result["details"]["has_yolo_structure"] = has_yolo_structure
 
             # 查找图像和标签文件
             images_info = self._find_images_and_labels(dataset_path)
@@ -58,10 +104,12 @@ class YOLORecognizer:
 
             # 计算置信度
             confidence = self._calculate_confidence(
-                bool(classes_file),
-                bool(data_file),
-                images_info.get("num_images", 0),
-                images_info.get("num_labels", 0)
+                yolo_type=yolo_type,
+                has_classes=bool(classes),
+                has_config=bool(data_config),
+                has_yolo_structure=has_yolo_structure,
+                num_images=images_info.get("num_images", 0),
+                num_labels=images_info.get("num_labels", 0)
             )
             result["confidence"] = confidence
 
@@ -76,8 +124,93 @@ class YOLORecognizer:
 
         return result
 
+    def _detect_yolo_type(self, dataset_path: Path) -> Tuple[str, Optional[Path]]:
+        """
+        检测YOLO类型
+
+        Returns:
+            (yolo_type, yaml_file): yolo_type为"ultralytics", "darknet"或"generic"
+        """
+        # 优先检测Ultralytics YOLO格式（dataset.yaml）
+        if YAML_AVAILABLE:
+            for yaml_name in self.ultralytics_files:
+                yaml_file = dataset_path / yaml_name
+                if yaml_file.exists():
+                    return "ultralytics", yaml_file
+
+        # 检测Darknet YOLO格式
+        has_obj_names = (dataset_path / "obj.names").exists()
+        has_obj_data = (dataset_path / "obj.data").exists()
+        if has_obj_names or has_obj_data:
+            return "darknet", None
+
+        # 检测通用YOLO结构（images/labels目录）
+        has_images_dir = (dataset_path / "images").exists()
+        has_labels_dir = (dataset_path / "labels").exists()
+        if has_images_dir and has_labels_dir:
+            return "generic", None
+
+        return "unknown", None
+
+    def _check_yolo_structure(self, dataset_path: Path) -> Dict:
+        """检查标准YOLO目录结构"""
+        structure = {
+            "has_images_dir": False,
+            "has_labels_dir": False,
+            "has_train_val_split": False,
+            "images_dir": None,
+            "labels_dir": None
+        }
+
+        # 检查标准目录
+        images_dir = dataset_path / "images"
+        labels_dir = dataset_path / "labels"
+
+        if images_dir.exists() and images_dir.is_dir():
+            structure["has_images_dir"] = True
+            structure["images_dir"] = str(images_dir)
+
+        if labels_dir.exists() and labels_dir.is_dir():
+            structure["has_labels_dir"] = True
+            structure["labels_dir"] = str(labels_dir)
+
+        # 检查是否有train/val分割
+        for split_name in ["train", "val", "test"]:
+            if (dataset_path / split_name).exists():
+                structure["has_train_val_split"] = True
+                break
+
+        return structure
+
+    def _load_ultralytics_config(self, yaml_file: Path) -> Tuple[List[str], Dict]:
+        """
+        加载Ultralytics YOLO配置文件
+
+        Returns:
+            (classes, config): 类别列表和配置字典
+        """
+        try:
+            with open(yaml_file, 'r', encoding='utf-8') as f:
+                config = yaml.safe_load(f) or {}
+
+            classes = []
+            if "names" in config:
+                names = config["names"]
+                if isinstance(names, dict):
+                    # {0: "cat", 1: "dog"} 格式
+                    classes = [names.get(i, f"class_{i}") for i in sorted(names.keys())]
+                elif isinstance(names, list):
+                    # ["cat", "dog"] 格式
+                    classes = names
+
+            return classes, config
+
+        except Exception as e:
+            print(f"加载Ultralytics配置文件失败: {e}")
+            return [], {}
+
     def _find_classes_file(self, dataset_path: Path) -> Optional[Path]:
-        """查找类别名称文件"""
+        """查找类别名称文件（Darknet格式）"""
         possible_names = ['obj.names', 'classes.txt', 'names.txt']
 
         for name in possible_names:
@@ -93,7 +226,7 @@ class YOLORecognizer:
         return None
 
     def _find_data_file(self, dataset_path: Path) -> Optional[Path]:
-        """查找数据配置文件"""
+        """查找数据配置文件（Darknet格式）"""
         possible_names = ['obj.data', 'dataset.data', 'yolo.data']
 
         for name in possible_names:
@@ -118,7 +251,7 @@ class YOLORecognizer:
             return []
 
     def _load_data_config(self, data_file: Path) -> Dict:
-        """加载数据配置"""
+        """加载数据配置（Darknet格式）"""
         config = {}
         try:
             with open(data_file, 'r', encoding='utf-8') as f:
@@ -157,7 +290,7 @@ class YOLORecognizer:
                     images.append(file_path)
                 elif ext in self.required_label_extensions:
                     # 检查是否为标签文件（不是obj.names等文件）
-                    if file_path.name not in ['obj.names', 'classes.txt', 'names.txt']:
+                    if file_path.name not in ['obj.names', 'classes.txt', 'names.txt', 'dataset.yaml', 'data.yaml', 'yolo.yaml']:
                         labels.append(file_path)
 
         # 统计信息
@@ -170,11 +303,13 @@ class YOLORecognizer:
         # 图像尺寸统计（抽样）
         image_stats = self._analyze_images(images[:100])  # 最多分析100张图
 
+        # 返回所有图像路径，不限制数量（或设置一个较大的限制）
+        max_paths = 10000  # 设置一个较大的限制，避免内存问题
         return {
             "num_images": num_images,
             "num_labels": num_labels,
-            "image_paths": [str(img) for img in images[:50]],  # 最多返回50个路径
-            "label_paths": [str(lbl) for lbl in labels[:50]],  # 最多返回50个路径
+            "image_paths": [str(img) for img in images[:max_paths]],
+            "label_paths": [str(lbl) for lbl in labels[:max_paths]],
             "label_stats": label_stats,
             "image_stats": image_stats
         }
@@ -260,36 +395,49 @@ class YOLORecognizer:
             "total_analyzed": len(sizes)
         }
 
-    def _calculate_confidence(self, has_classes: bool, has_data: bool,
-                            num_images: int, num_labels: int) -> float:
+    def _calculate_confidence(self, yolo_type: str, has_classes: bool, has_config: bool,
+                            has_yolo_structure: Dict, num_images: int, num_labels: int) -> float:
         """计算YOLO格式置信度"""
         confidence = 0.0
 
-        # 类别文件权重
+        # YOLO类型基础分
+        if yolo_type == "ultralytics":
+            confidence += 0.4  # Ultralytics格式有明确配置文件
+        elif yolo_type == "darknet":
+            confidence += 0.3  # Darknet格式
+        elif yolo_type == "generic":
+            confidence += 0.2  # 通用YOLO结构
+
+        # 类别信息权重
         if has_classes:
-            confidence += 0.3
-
-        # 数据配置文件权重
-        if has_data:
-            confidence += 0.3
-
-        # 图像和标签文件权重
-        if num_images > 0:
             confidence += 0.2
-            # 图像数量加分
-            if num_images >= 10:
+            if len(has_classes if isinstance(has_classes, list) else []) >= 2:
                 confidence += 0.1
 
-        if num_labels > 0:
+        # 配置文件权重
+        if has_config:
+            confidence += 0.1
+
+        # 标准YOLO目录结构权重（images + labels）
+        if has_yolo_structure.get("has_images_dir") and has_yolo_structure.get("has_labels_dir"):
             confidence += 0.2
-            # 标签数量加分
-            if num_labels >= 10:
+
+        # 图像文件权重
+        if num_images > 0:
+            confidence += 0.1
+            if num_images >= 20:
+                confidence += 0.1
+
+        # 标签文件权重
+        if num_labels > 0:
+            confidence += 0.1
+            if num_labels >= 20:
                 confidence += 0.1
 
         # 标签与图像比例加分
         if num_images > 0 and num_labels > 0:
             ratio = min(num_labels, num_images) / max(num_labels, num_images)
-            if ratio > 0.8:  # 标签和图像数量接近
+            if ratio > 0.7:  # 标签和图像数量接近
                 confidence += 0.1
 
         return min(confidence, 1.0)

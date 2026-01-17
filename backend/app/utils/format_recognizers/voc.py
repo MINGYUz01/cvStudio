@@ -133,10 +133,12 @@ class VOCRecognizer:
 
         num_annotations = len(annotation_files)
 
+        # 设置较大的限制，避免内存问题
+        max_paths = 10000
         return {
             "num_annotations": num_annotations,
-            "annotation_files": [str(f) for f in annotation_files[:50]],  # 最多返回50个
-            "annotation_paths": [str(f) for f in annotation_files[:10]]  # 前10个用于解析
+            "annotation_files": [str(f) for f in annotation_files[:max_paths]],
+            "annotation_paths": [str(f) for f in annotation_files[:20]]  # 前20个用于解析
         }
 
     def _find_images(self, dataset_path: Path) -> Dict:
@@ -168,11 +170,14 @@ class VOCRecognizer:
         num_images = len(image_files)
 
         # 分析图像尺寸（抽样）
-        image_stats = self._analyze_images(image_files[:50])  # 最多分析50张图
+        image_stats = self._analyze_images(image_files[:100])  # 最多分析100张图
 
+        # 设置较大的限制，避免内存问题
+        max_paths = 10000
         return {
             "num_images": num_images,
-            "image_files": [str(f) for f in image_files[:50]],  # 最多返回50个
+            "image_files": [str(f) for f in image_files[:max_paths]],
+            "image_paths": [str(f) for f in image_files[:max_paths]],  # 添加image_paths以保持一致性
             "image_stats": image_stats
         }
 
@@ -327,31 +332,35 @@ class VOCRecognizer:
         """计算VOC格式置信度"""
         confidence = 0.0
 
+        # VOC格式的核心特征是XML标注文件，没有XML就不应该是VOC格式
+        if num_annotations == 0:
+            # 没有XML标注文件，置信度设为极低
+            return 0.1  # 只给一点点基础分，表示可能是错误识别
+
+        # XML标注文件权重（核心特征）
+        confidence += 0.5  # 有XML文件就给很高权重
+        # 标注数量加分
+        if num_annotations >= 10:
+            confidence += 0.1
+        if num_annotations >= 50:
+            confidence += 0.1
+
         # 目录结构权重
         structure_score = voc_structure.get("structure_score", 0)
-        confidence += structure_score * 0.3
+        confidence += structure_score * 0.1  # 降低目录结构权重
 
-        # XML标注文件权重
-        if num_annotations > 0:
-            confidence += 0.3
-            # 标注数量加分
-            if num_annotations >= 10:
-                confidence += 0.1
-            if num_annotations >= 50:
-                confidence += 0.1
-
-        # 图像文件权重
+        # 图像文件权重（只有在有XML的情况下才加分）
         if num_images > 0:
-            confidence += 0.2
+            confidence += 0.1
             # 图像数量加分
             if num_images >= 10:
-                confidence += 0.1
+                confidence += 0.05
 
         # ImageSets权重
         if has_imagesets:
             confidence += 0.1
 
-        # 文件比例权重
+        # 文件比例权重（XML和图像的比例）
         if num_annotations > 0 and num_images > 0:
             ratio = min(num_annotations, num_images) / max(num_annotations, num_images)
             if ratio > 0.5:  # 标注和图像数量比较接近
