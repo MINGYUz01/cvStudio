@@ -17,18 +17,21 @@ import {
   AlertCircle,
   Archive,
   CheckCircle,
+  XCircle,
   Loader2,
   Trash2,
   FileImage,
   FileText,
   Filter,
-  SlidersHorizontal
+  SlidersHorizontal,
+  Info
 } from 'lucide-react';
 import { DatasetItem } from '../types';
 import { useDataset } from '../src/hooks/useDataset';
-import { adaptDatasetList } from '../src/services/datasetAdapter';
+import { adaptDatasetList, DatasetFormatStatus } from '../src/services/datasetAdapter';
 import { datasetService } from '../src/services/datasets';
 import { apiClient } from '../src/services/api';
+import DatasetStatusLegend from './DatasetStatusLegend';
 
 // --- Import Dataset Dialog Component ---
 interface ImportDatasetDialogProps {
@@ -771,6 +774,9 @@ const DatasetManager: React.FC = () => {
     sortOrder: 'asc' as 'asc' | 'desc'  // 排序顺序
   });
 
+  // 状态说明弹窗
+  const [legendOpen, setLegendOpen] = useState(false);
+
   // 获取所有可用的数据集类型
   const availableTypes = Array.from(new Set(datasets.map(ds => ds.type))).sort();
 
@@ -1050,13 +1056,11 @@ const DatasetManager: React.FC = () => {
          </div>
          <div className="flex gap-2">
            <button
-             onClick={fetchDatasets}
-             disabled={loading}
-             className="flex items-center px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white font-bold rounded-xl border border-slate-700 transition-all disabled:opacity-50"
-             title="刷新列表"
+             onClick={() => setLegendOpen(true)}
+             className="flex items-center px-3 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-xl border border-slate-700 transition-all"
+             title="查看状态说明"
            >
-              <RefreshCw size={18} className={`mr-2 ${loading ? 'animate-spin' : ''}`} />
-              刷新
+              <Info size={18} className="text-slate-400" />
            </button>
            <button
              onClick={handleOpenImportDialog}
@@ -1247,9 +1251,43 @@ const DatasetManager: React.FC = () => {
                       <Trash2 size={14} />
                     </button>
                   </div>
-                  <div className="flex justify-between text-[10px] text-slate-500">
-                    <span className="bg-slate-900 px-1.5 py-0.5 rounded border border-slate-800">{ds.type}</span>
+                  <div className="flex justify-between items-center text-[10px] text-slate-500 mb-1">
+                    <span className={`px-1.5 py-0.5 rounded border ${
+                      ds.formatStatus === DatasetFormatStatus.STANDARD
+                        ? 'bg-emerald-900/30 border-emerald-700 text-emerald-400'
+                        : ds.formatStatus === DatasetFormatStatus.NON_STANDARD
+                        ? 'bg-amber-900/30 border-amber-700 text-amber-400'
+                        : 'bg-red-900/30 border-red-700 text-red-400'
+                    }`}>
+                      {ds.type}
+                    </span>
                     <span>{ds.count.toLocaleString()} imgs</span>
+                  </div>
+
+                  {/* 训练可用性标识 */}
+                  <div className="flex justify-between items-center text-[10px]">
+                    {ds.canTrain ? (
+                      <span className="flex items-center text-emerald-400">
+                        <CheckCircle size={12} className="mr-1" />
+                        可训练
+                      </span>
+                    ) : (
+                      <span className="flex items-center text-slate-500">
+                        <XCircle size={12} className="mr-1" />
+                        仅预览
+                      </span>
+                    )}
+                  </div>
+
+                  {/* 置信度指示条 */}
+                  <div className="mt-2 h-1 bg-slate-800 rounded-full overflow-hidden">
+                    <div
+                      className={`h-full transition-all ${
+                        ds.formatConfidence >= 0.7 ? 'bg-emerald-500' :
+                        ds.formatConfidence >= 0.3 ? 'bg-amber-500' : 'bg-red-500'
+                      }`}
+                      style={{ width: `${ds.formatConfidence * 100}%` }}
+                    />
                   </div>
 
                   {/* Gradient Glow Effect */}
@@ -1426,6 +1464,12 @@ const DatasetManager: React.FC = () => {
         datasetId={datasetToViewDescription?.id || ''}
         description={datasetToViewDescription?.description}
         onSave={handleSaveDescription}
+      />
+
+      {/* Status Legend Dialog */}
+      <DatasetStatusLegend
+        isOpen={legendOpen}
+        onClose={() => setLegendOpen(false)}
       />
     </div>
   );

@@ -54,6 +54,8 @@ class DatasetResponse(DatasetBase):
     classes: List[str] = []
     meta: Dict[str, Any] = {}
     is_active: str
+    is_standard: bool = False  # 是否为标准格式（可直接用于训练）
+    format_confidence: float = 0  # 格式识别置信度 (0-1)
     created_at: datetime
     updated_at: Optional[datetime] = None
 

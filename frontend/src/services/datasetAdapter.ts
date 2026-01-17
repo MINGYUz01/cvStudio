@@ -6,6 +6,15 @@
 import { Dataset } from './datasets';
 
 /**
+ * 数据集格式状态枚举
+ */
+export enum DatasetFormatStatus {
+  STANDARD = 'standard',         // 标准格式（可直接训练）
+  NON_STANDARD = 'non_standard', // 非标准格式（可预览，不能训练）
+  UNRECOGNIZED = 'unrecognized'  // 未识别格式（可预览，不能训练）
+}
+
+/**
  * 统计信息接口
  */
 export interface DatasetStats {
@@ -28,6 +37,40 @@ export interface DatasetItem {
   description?: string;  // 数据集描述
   stats?: DatasetStats;  // 统计信息（从meta中提取）
   rawMeta?: Record<string, any>;  // 原始元数据（用于获取更详细的信息）
+  formatStatus: DatasetFormatStatus;  // 格式状态
+  formatConfidence: number;            // 格式识别置信度 0-1
+  canTrain: boolean;                   // 是否可用于训练
+}
+
+/**
+ * 判断数据集格式状态
+ */
+function getFormatStatus(dataset: Dataset): DatasetFormatStatus {
+  // 优先使用 is_standard 字段，其次使用 meta 中的值，最后根据置信度判断
+  const isStandard = dataset.is_standard ?? dataset.meta?.is_standard ?? false;
+  if (isStandard) {
+    return DatasetFormatStatus.STANDARD;
+  }
+
+  const confidence = dataset.meta?.format_confidence ?? dataset.format_confidence ?? 0;
+
+  if (confidence >= 0.7) {
+    return DatasetFormatStatus.STANDARD;
+  } else if (confidence >= 0.3) {
+    return DatasetFormatStatus.NON_STANDARD;
+  } else {
+    return DatasetFormatStatus.UNRECOGNIZED;
+  }
+}
+
+/**
+ * 判断数据集是否可用于训练
+ */
+function canDatasetTrain(dataset: Dataset): boolean {
+  const status = getFormatStatus(dataset);
+  const format = dataset.format.toLowerCase();
+  const supportedFormats = ['yolo', 'coco', 'voc', 'classification'];
+  return status === DatasetFormatStatus.STANDARD && supportedFormats.includes(format);
 }
 
 /**
@@ -73,6 +116,9 @@ function extractStats(dataset: Dataset): DatasetStats | undefined {
  * 将后端Dataset转换为前端DatasetItem
  */
 export function adaptDatasetToItem(dataset: Dataset): DatasetItem {
+  const formatStatus = getFormatStatus(dataset);
+  const formatConfidence = dataset.meta?.format_confidence ?? dataset.format_confidence ?? 0;
+
   return {
     id: dataset.id.toString(),
     name: dataset.name,
@@ -83,6 +129,9 @@ export function adaptDatasetToItem(dataset: Dataset): DatasetItem {
     description: dataset.description,
     stats: extractStats(dataset),
     rawMeta: dataset.meta,
+    formatStatus,
+    formatConfidence,
+    canTrain: canDatasetTrain(dataset),
   };
 }
 

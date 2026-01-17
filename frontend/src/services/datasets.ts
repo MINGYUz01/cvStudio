@@ -20,6 +20,8 @@ export interface Dataset {
   classes: string[];
   meta: Record<string, any>;
   is_active: string;
+  is_standard?: boolean;  // 是否为标准格式（可直接用于训练）
+  format_confidence?: number;  // 格式识别置信度 (0-1)
   created_at: string;
   updated_at?: string;
 }

@@ -31,6 +31,10 @@ SUPPORTED_ARCHIVE_FORMATS = {
     '.7z': '7z',
 }
 
+# 标准格式置信度阈值
+STANDARD_FORMAT_THRESHOLD = 0.7
+NON_STANDARD_THRESHOLD = 0.3
+
 
 class DatasetService:
     """数据集服务类"""
@@ -98,7 +102,8 @@ class DatasetService:
                 num_images=metadata.get("num_images", 0),
                 num_classes=metadata.get("num_classes", 0),
                 classes=metadata.get("classes", []),
-                meta=metadata
+                meta=metadata,
+                is_standard=metadata.get("is_standard", False)
             )
 
             db.add(dataset)
@@ -165,7 +170,8 @@ class DatasetService:
                 num_images=metadata.get("num_images", 0),
                 num_classes=metadata.get("num_classes", 0),
                 classes=metadata.get("classes", []),
-                meta=metadata
+                meta=metadata,
+                is_standard=metadata.get("is_standard", False)
             )
 
             db.add(dataset)
@@ -262,7 +268,8 @@ class DatasetService:
                 num_images=metadata.get("num_images", 0),
                 num_classes=metadata.get("num_classes", 0),
                 classes=metadata.get("classes", []),
-                meta=metadata
+                meta=metadata,
+                is_standard=metadata.get("is_standard", False)
             )
 
             db.add(dataset)
@@ -685,6 +692,7 @@ class DatasetService:
             dataset.num_classes = metadata.get("num_classes", 0)
             dataset.classes = metadata.get("classes", [])
             dataset.meta = metadata
+            dataset.is_standard = metadata.get("is_standard", False)
 
             db.commit()
             db.refresh(dataset)
@@ -773,6 +781,50 @@ class DatasetService:
 
         return total_size
 
+    def _is_standard_format(self, format_result: Dict, dataset_path: Path = None) -> bool:
+        """
+        判断数据集是否为标准格式（可直接用于训练）
+
+        标准格式判定规则：
+        1. 置信度 >= 0.7
+        2. 有足够的图像数量（>=10张）
+        3. 对于检测任务，有足够的标注（标注率 >= 50%）
+
+        Args:
+            format_result: 格式识别结果
+            dataset_path: 数据集路径
+
+        Returns:
+            bool: 是否为标准格式
+        """
+        best_format = format_result["best_format"]
+        confidence = best_format.get("confidence", 0)
+
+        # 基础置信度检查
+        if confidence < STANDARD_FORMAT_THRESHOLD:
+            return False
+
+        details = best_format.get("details", {})
+
+        # 图像数量检查
+        num_images = details.get("num_images", 0)
+        if num_images < 10:
+            return False
+
+        # 对于检测格式（YOLO、COCO、VOC），检查标注质量
+        format_name = best_format.get("format", "")
+        if format_name in ["yolo", "coco", "voc"]:
+            # 检查标注率
+            label_stats = details.get("label_stats", {})
+            annotated_images = label_stats.get("annotated_images",
+                              label_stats.get("valid_labels", 0))
+            annotation_rate = annotated_images / num_images if num_images > 0 else 0
+
+            if annotation_rate < 0.5:
+                return False
+
+        return True
+
     def _extract_metadata(self, format_result: Dict, dataset_path: Path = None) -> Dict:
         """
         从格式识别结果中提取元信息
@@ -789,6 +841,7 @@ class DatasetService:
 
         metadata = {
             "format_confidence": best_format.get("confidence", 0),
+            "is_standard": self._is_standard_format(format_result, dataset_path) if dataset_path else False,
             "recognition_error": best_format.get("error"),
             "all_recognition_results": format_result.get("all_results", {})
         }

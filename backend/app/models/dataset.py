@@ -2,7 +2,7 @@
 数据集数据模型
 """
 
-from sqlalchemy import Column, Integer, String, DateTime, Text, JSON
+from sqlalchemy import Column, Integer, String, DateTime, Text, JSON, Boolean
 from sqlalchemy.sql import func
 from app.database import Base
 
@@ -21,8 +21,16 @@ class Dataset(Base):
     classes = Column(JSON, nullable=True)  # 类别信息
     meta = Column(JSON, nullable=True)  # 元数据（图像尺寸、统计信息等）
     is_active = Column(String(10), default="active")  # active, deleted
+    is_standard = Column(Boolean, default=False)  # 是否为标准格式（可直接用于训练）
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    @property
+    def format_confidence(self) -> float:
+        """从meta中获取格式识别置信度"""
+        if self.meta:
+            return self.meta.get("format_confidence", 0)
+        return 0
 
     def __repr__(self):
         return f"<Dataset(id={self.id}, name='{self.name}', format='{self.format}')>"
