@@ -46,7 +46,9 @@ class ClassificationRecognizer:
             if is_classification:
                 # 提取类别信息
                 classes_info = self._extract_classes(dataset_path, structure_info)
-                result["details"]["classes"] = classes_info
+                result["details"]["classes"] = classes_info.get("class_names", [])
+                result["details"]["class_directories"] = classes_info.get("class_directories", {})
+                result["details"]["num_classes"] = classes_info.get("num_classes", 0)
 
                 # 分析图像信息
                 images_info = self._analyze_images(dataset_path, classes_info.get("class_directories", {}))
@@ -311,6 +313,7 @@ class ClassificationRecognizer:
                 break
 
         images_info["total_images"] = sum(info.get("image_count", 0) for info in class_directories.values())
+        images_info["num_images"] = images_info["total_images"]  # 添加 num_images 别名以兼容
         images_info["analyzed_images"] = len(sizes)
         images_info["image_paths"] = all_image_paths  # 保存所有图像路径
 

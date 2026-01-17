@@ -550,6 +550,102 @@ async def get_dataset_images(
         raise HTTPException(status_code=500, detail=f"获取图像列表失败: {str(e)}")
 
 
+@router.get("/{dataset_id}/images/by-class")
+async def get_images_by_class(
+    dataset_id: int,
+    class_name: str = Query(..., description="类别名称"),
+    page: int = Query(1, ge=1, description="页码"),
+    page_size: int = Query(20, ge=1, le=100, description="每页大小"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    按类别获取数据集中的图片（用于分类任务）
+    """
+    try:
+        dataset = dataset_service.get_dataset(db, dataset_id)
+        if not dataset:
+            raise HTTPException(status_code=404, detail=f"数据集 {dataset_id} 不存在")
+
+        # 仅支持分类格式
+        if dataset.format.lower() != "classification":
+            raise HTTPException(status_code=400, detail="此API仅支持分类格式的数据集")
+
+        result = await dataset_service.get_images_by_class(
+            dataset_path=dataset.path,
+            class_name=class_name,
+            page=page,
+            page_size=page_size
+        )
+
+        return APIResponse(
+            success=True,
+            message=f"获取类别 '{class_name}' 的图片成功",
+            data=result
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"获取图片失败: {str(e)}")
+
+
+@router.get("/{dataset_id}/images/{image_path:path}/annotations")
+async def get_image_annotations(
+    dataset_id: int,
+    image_path: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    获取图片的标注数据（用于前端绘制标注框）
+    """
+    try:
+        dataset = dataset_service.get_dataset(db, dataset_id)
+        if not dataset:
+            raise HTTPException(status_code=404, detail=f"数据集 {dataset_id} 不存在")
+
+        # 验证图像路径
+        from pathlib import Path
+        dataset_root = Path(dataset.path).resolve()
+        image_full_path = (dataset_root / image_path).resolve()
+
+        try:
+            image_full_path.relative_to(dataset_root)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="图像路径不在数据集范围内")
+
+        # 获取图片尺寸和标注
+        from app.utils.image_processor import image_processor
+        img_info = image_processor.get_image_info(str(image_full_path))
+
+        if not img_info:
+            raise HTTPException(status_code=404, detail="图片不存在")
+
+        # 获取标注数据
+        from app.services.augmentation_service import augmentation_service
+        format_type = dataset.format.lower()
+
+        annotations = []
+        if format_type in ["yolo", "coco", "voc"]:
+            annotations = augmentation_service._get_image_annotations(
+                str(image_full_path), str(dataset_root), format_type
+            )
+
+        return {
+            "success": True,
+            "data": {
+                "image_width": img_info.get('width', 0),
+                "image_height": img_info.get('height', 0),
+                "annotations": annotations,
+                "format": format_type
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"获取标注失败: {str(e)}")
+
+
 @router.get("/{dataset_id}/images/{image_path:path}", response_model=APIResponse[ImageDetail])
 async def get_image_detail(
     dataset_id: int,
@@ -877,45 +973,62 @@ async def get_dataset_filter_options(
 @router.get("/{dataset_id}/image-file")
 async def get_dataset_image_file(
     dataset_id: int,
-    index: int = Query(..., ge=0, description="图像索引"),
+    index: Optional[int] = Query(None, ge=0, description="图像索引"),
+    relative_path: Optional[str] = Query(None, description="图像相对路径"),
     db: Session = Depends(get_db)
     # 移除认证要求，允许直接访问图片文件用于显示
     # current_user: User = Depends(get_current_user)
 ):
     """
-    根据索引获取数据集中的图像文件
+    根据索引或相对路径获取数据集中的图像文件
     前端可以直接使用此端点显示图片
     注意：此端点不要求认证，方便前端<img>标签直接加载
+
+    参数:
+    - index: 图像在image_paths数组中的索引（与relative_path二选一）
+    - relative_path: 图像相对于数据集根目录的路径（与index二选一）
     """
     try:
         dataset = dataset_service.get_dataset(db, dataset_id)
         if not dataset:
             raise HTTPException(status_code=404, detail=f"数据集 {dataset_id} 不存在")
 
-        # 从元数据中获取图像路径列表
-        image_paths = dataset.meta.get("image_paths", [])
-        if not image_paths:
-            raise HTTPException(status_code=404, detail="数据集没有图像路径信息")
+        # 验证至少提供了一个参数
+        if index is None and relative_path is None:
+            raise HTTPException(status_code=400, detail="必须提供 index 或 relative_path 参数")
 
-        if index >= len(image_paths):
-            raise HTTPException(status_code=404, detail=f"图像索引 {index} 超出范围")
-
-        image_path = image_paths[index]
-
-        # 验证图像路径是否在数据集路径内
         from pathlib import Path
         dataset_root = Path(dataset.path).resolve()
-        image_full_path = Path(image_path).resolve()
 
-        try:
-            image_full_path.relative_to(dataset_root)
-        except ValueError:
-            # 如果路径是相对路径，尝试相对于数据集根目录
-            image_full_path = (dataset_root / Path(image_path).name).resolve()
+        # 根据参数确定图片路径
+        if relative_path is not None:
+            # 使用相对路径直接定位图片
+            image_full_path = (dataset_root / relative_path).resolve()
             try:
                 image_full_path.relative_to(dataset_root)
             except ValueError:
                 raise HTTPException(status_code=400, detail="图像路径不在数据集范围内")
+        else:
+            # 使用索引从元数据中获取图像路径
+            image_paths = dataset.meta.get("image_paths", [])
+            if not image_paths:
+                raise HTTPException(status_code=404, detail="数据集没有图像路径信息")
+
+            if index >= len(image_paths):
+                raise HTTPException(status_code=404, detail=f"图像索引 {index} 超出范围")
+
+            image_path = image_paths[index]
+            image_full_path = Path(image_path).resolve()
+
+            try:
+                image_full_path.relative_to(dataset_root)
+            except ValueError:
+                # 如果路径是相对路径，尝试相对于数据集根目录
+                image_full_path = (dataset_root / Path(image_path).name).resolve()
+                try:
+                    image_full_path.relative_to(dataset_root)
+                except ValueError:
+                    raise HTTPException(status_code=400, detail="图像路径不在数据集范围内")
 
         # 检查文件是否存在
         if not image_full_path.exists():

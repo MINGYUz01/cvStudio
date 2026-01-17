@@ -7,6 +7,7 @@ import {
   Layout,
   X,
   Eye,
+  EyeOff,
   Calendar,
   HardDrive,
   Upload,
@@ -24,7 +25,8 @@ import {
   FileText,
   Filter,
   SlidersHorizontal,
-  Info
+  Info,
+  Tags
 } from 'lucide-react';
 import { DatasetItem } from '../types';
 import { useDataset } from '../src/hooks/useDataset';
@@ -32,6 +34,7 @@ import { adaptDatasetList, DatasetFormatStatus } from '../src/services/datasetAd
 import { datasetService } from '../src/services/datasets';
 import { apiClient } from '../src/services/api';
 import DatasetStatusLegend from './DatasetStatusLegend';
+import AnnotationOverlay from './AnnotationOverlay';
 
 // --- Import Dataset Dialog Component ---
 interface ImportDatasetDialogProps {
@@ -688,11 +691,57 @@ const UnknownFormatView: React.FC<UnknownFormatViewProps> = ({ datasetId, datase
 };
 
 // --- Modern Lightbox Component ---
-const Lightbox: React.FC<{ src: string, onClose: () => void }> = ({ src, onClose }) => {
+interface LightboxProps {
+  src: string | { url: string; index: number };
+  onClose: () => void;
+  datasetId: string;
+  datasets: any[];
+}
+
+const Lightbox: React.FC<LightboxProps> = ({ src, onClose, datasetId, datasets }) => {
   const [scale, setScale] = useState(1);
   const [position, setPosition] = useState({ x: 0, y: 0 });
+  const [annotations, setAnnotations] = useState<any[]>([]);
+  const [showAnnotations, setShowAnnotations] = useState(true);
+  const [imageSize, setImageSize] = useState({ width: 0, height: 0 });
   const isDragging = useRef(false);
   const startPos = useRef({ x: 0, y: 0 });
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  // 获取图片URL和索引
+  const imgUrl = typeof src === 'string' ? src : src.url;
+  const imgIndex = typeof src === 'string' ? 0 : src.index;
+
+  // 加载标注数据
+  useEffect(() => {
+    const loadAnnotations = async () => {
+      const currentDataset = datasets.find((ds: any) => ds.id === parseInt(datasetId));
+      if (!currentDataset) return;
+
+      const isDetection = ['yolo', 'coco', 'voc'].includes(
+        currentDataset.format.toLowerCase()
+      );
+      if (!isDetection) return;
+
+      try {
+        // 获取图片的相对路径
+        const imagePaths = currentDataset.meta?.image_paths || [];
+        const relativePath = imagePaths[imgIndex];
+
+        if (relativePath) {
+          const result = await datasetService.getImageAnnotations(
+            parseInt(datasetId),
+            relativePath
+          );
+          setAnnotations(result.annotations);
+          setImageSize({ width: result.imageWidth, height: result.imageHeight });
+        }
+      } catch (err) {
+        console.error('加载标注失败:', err);
+      }
+    };
+    loadAnnotations();
+  }, [datasetId, imgIndex, datasets]);
 
   const handleWheel = (e: React.WheelEvent) => {
     e.stopPropagation();
@@ -719,37 +768,72 @@ const Lightbox: React.FC<{ src: string, onClose: () => void }> = ({ src, onClose
   };
 
   return (
-    <div 
-      className="fixed inset-0 z-[100] bg-black/95 backdrop-blur-sm flex items-center justify-center overflow-hidden" 
+    <div
+      className="fixed inset-0 z-[100] bg-black/95 backdrop-blur-sm flex items-center justify-center overflow-hidden"
       onWheel={handleWheel}
       onClick={onClose}
     >
-      <button 
-        onClick={onClose} 
+      <button
+        onClick={onClose}
         className="absolute top-6 right-6 p-2 text-slate-400 hover:text-white transition-colors z-[101]"
       >
         <X size={32} />
       </button>
 
+      {/* 标注开关 */}
+      {annotations.length > 0 && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            setShowAnnotations(!showAnnotations);
+          }}
+          className="absolute top-6 left-6 px-3 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-lg z-[101] flex items-center"
+        >
+          {showAnnotations ? <Eye size={16} className="mr-2" /> : <EyeOff size={16} className="mr-2" />}
+          标注
+        </button>
+      )}
+
       <div className="absolute bottom-6 left-1/2 -translate-x-1/2 text-slate-500 text-xs pointer-events-none bg-black/50 px-3 py-1 rounded-full">
         滚轮缩放 • 拖拽平移
       </div>
 
-      <img 
-        src={src} 
-        className="max-w-none transition-transform duration-75 cursor-move" 
-        style={{ 
-          transform: `translate(${position.x}px, ${position.y}px) scale(${scale})`,
-          maxHeight: '90vh',
-          maxWidth: '90vw'
-        }} 
+      <div
+        ref={containerRef}
+        className="relative"
         onClick={(e) => e.stopPropagation()}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseUp}
-        onDragStart={(e) => e.preventDefault()}
-      />
+      >
+        <img
+          src={imgUrl}
+          className="max-w-none transition-transform duration-75 cursor-move"
+          style={{
+            transform: `translate(${position.x}px, ${position.y}px) scale(${scale})`,
+            maxHeight: '90vh',
+            maxWidth: '90vw'
+          }}
+          onDragStart={(e) => e.preventDefault()}
+          onLoad={(e) => {
+            const img = e.target as HTMLImageElement;
+            setImageSize({ width: img.naturalWidth, height: img.naturalHeight });
+          }}
+        />
+
+        {/* 标注叠加层 */}
+        {showAnnotations && annotations.length > 0 && containerRef.current && (
+          <AnnotationOverlay
+            annotations={annotations}
+            imageWidth={imageSize.width}
+            imageHeight={imageSize.height}
+            displayWidth={containerRef.current.offsetWidth || 800}
+            displayHeight={containerRef.current.offsetHeight || 600}
+            showLabels={true}
+          />
+        )}
+      </div>
     </div>
   );
 };
@@ -838,8 +922,17 @@ const DatasetManager: React.FC = () => {
                           filterOptions.sortOrder !== 'asc';
 
   const [selectedDsId, setSelectedDsId] = useState<string>('');
-  const [lightboxImg, setLightboxImg] = useState<string | null>(null);
+  const [lightboxImg, setLightboxImg] = useState<string | { url: string; index: number } | null>(null);
   const [imageUrls, setImageUrls] = useState<string[]>([]);
+
+  // 类别筛选状态
+  const [selectedClass, setSelectedClass] = useState<string | null>(null);
+  const [classList, setClassList] = useState<string[]>([]);
+  const [classImages, setClassImages] = useState<string[]>([]);
+
+  // 标注数据缓存和显示状态
+  const [annotationsCache, setAnnotationsCache] = useState<Map<string, any[]>>(new Map());
+  const [showAnnotations, setShowAnnotations] = useState(true);
 
   // 导入弹窗状态
   const [importDialogOpen, setImportDialogOpen] = useState(false);
@@ -894,6 +987,60 @@ const DatasetManager: React.FC = () => {
       setIsLoadingMore(false);
     }, 500);
   };
+
+  // 当选中的数据集改变时，加载类别列表（分类格式）
+  useEffect(() => {
+    if (selectedDsId && apiDatasets.length > 0) {
+      const selectedDataset = apiDatasets.find((ds: any) => ds.id === parseInt(selectedDsId));
+      if (selectedDataset) {
+        // 获取类别列表
+        const classes = selectedDataset.classes || [];
+        setClassList(classes);
+
+        // 如果是分类格式，重置筛选状态
+        if (selectedDataset.format.toLowerCase() === 'classification') {
+          setSelectedClass(null);
+          setClassImages([]);
+        }
+
+        // 清空标注缓存
+        setAnnotationsCache(new Map());
+      }
+    }
+  }, [selectedDsId, apiDatasets]);
+
+  // 按类别加载图片
+  useEffect(() => {
+    if (selectedClass) {
+      const loadImagesByClass = async () => {
+        try {
+          const result = await datasetService.getImagesByClass(
+            parseInt(selectedDsId),
+            selectedClass,
+            1,
+            100
+          );
+          const cacheBuster = Date.now();
+          // 使用 relative_path 参数获取图片
+          const urls = result.images.map((img: any) =>
+            `${apiClient['baseURL']}/datasets/${selectedDsId}/image-file?relative_path=${encodeURIComponent(img.relative_path)}&_t=${cacheBuster}`
+          );
+          setClassImages(urls);
+        } catch (err) {
+          console.error('加载类别图片失败:', err);
+          setClassImages([]);
+        }
+      };
+      loadImagesByClass();
+    } else {
+      setClassImages([]);
+    }
+  }, [selectedClass, selectedDsId]);
+
+  // 重置可见样本数当切换类别时
+  useEffect(() => {
+    setVisibleSamples(24);
+  }, [selectedClass]);
 
   // 打开导入弹窗
   const handleOpenImportDialog = () => {
@@ -1385,22 +1532,121 @@ const DatasetManager: React.FC = () => {
 
                     {/* Gallery */}
                     <div className="pb-4">
-                       <h3 className="text-sm font-bold text-slate-300 mb-4 flex items-center">
-                         <Eye size={16} className="mr-2" /> 样本概览
-                       </h3>
+                       {/* 类别筛选器 - 仅对分类格式显示 */}
+                       {(() => {
+                         const currentDataset = datasets.find(d => d.id === selectedDsId);
+                         const isClassification = currentDataset?.type?.toLowerCase() === 'classification';
+
+                         if (isClassification && classList.length > 0) {
+                           return (
+                             <div className="mb-4">
+                               <h4 className="text-xs text-slate-400 mb-2 flex items-center">
+                                 <Tags size={14} className="mr-2" /> 按类别筛选
+                               </h4>
+                               <div className="flex flex-wrap gap-2">
+                                 <button
+                                   onClick={() => setSelectedClass(null)}
+                                   className={`px-3 py-1.5 rounded-full text-xs font-medium transition-all ${
+                                     selectedClass === null
+                                       ? 'bg-cyan-600 text-white shadow-lg shadow-cyan-900/20'
+                                       : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+                                   }`}
+                                 >
+                                   全部 ({imageUrls.length})
+                                 </button>
+                                 {classList.map((cls) => {
+                                   // 从meta中获取类别图片数量，支持新旧两种格式
+                                   const classCount = currentDataset?.meta?.class_distribution?.[cls] ||
+                                                      currentDataset?.meta?.class_directories?.[cls]?.image_count || 0;
+                                   return (
+                                     <button
+                                       key={cls}
+                                       onClick={() => setSelectedClass(cls)}
+                                       className={`px-3 py-1.5 rounded-full text-xs font-medium transition-all ${
+                                         selectedClass === cls
+                                           ? 'bg-cyan-600 text-white shadow-lg shadow-cyan-900/20'
+                                           : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+                                       }`}
+                                     >
+                                       {cls} ({classCount})
+                                     </button>
+                                   );
+                                 })}
+                               </div>
+                             </div>
+                           );
+                         }
+                         return null;
+                       })()}
+
+                       {/* 标题区域 - 根据数据集类型显示不同内容 */}
+                       {(() => {
+                         const currentDataset = datasets.find(d => d.id === selectedDsId);
+                         const isDetection = ['yolo', 'coco', 'voc'].includes(
+                           currentDataset?.type?.toLowerCase() || ''
+                         );
+
+                         return (
+                           <div className={`flex items-center mb-4 ${isDetection ? 'justify-between' : ''}`}>
+                             <h3 className="text-sm font-bold text-slate-300 flex items-center">
+                               <Eye size={16} className="mr-2" /> 样本概览
+                             </h3>
+                             {isDetection && (
+                               <button
+                                 onClick={() => setShowAnnotations(!showAnnotations)}
+                                 className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all flex items-center ${
+                                   showAnnotations
+                                     ? 'bg-cyan-600/20 text-cyan-400 border border-cyan-600/30'
+                                     : 'bg-slate-800 text-slate-500 border border-slate-700'
+                                 }`}
+                               >
+                                 {showAnnotations ? <Eye size={14} className="mr-1.5" /> : <EyeOff size={14} className="mr-1.5" />}
+                                 {showAnnotations ? '显示标注' : '隐藏标注'}
+                               </button>
+                             )}
+                           </div>
+                         );
+                       })()}
+
                        <div className="grid grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-3 mb-6">
-                         {imageUrls.slice(0, visibleSamples).length > 0 ? (
-                           imageUrls.slice(0, visibleSamples).map((imgUrl, i) => (
-                             <div key={i} onClick={() => setLightboxImg(imgUrl)} className="aspect-square bg-slate-800 rounded border border-slate-800 overflow-hidden relative group cursor-pointer hover:border-cyan-500 transition-all duration-200">
+                         {(selectedClass ? classImages : imageUrls).slice(0, visibleSamples).length > 0 ? (
+                           (selectedClass ? classImages : imageUrls).slice(0, visibleSamples).map((imgUrl, i) => (
+                             <div
+                               key={i}
+                               onClick={() => setLightboxImg({ url: imgUrl, index: i })}
+                               className="aspect-square bg-slate-800 rounded border border-slate-800 overflow-hidden relative group cursor-pointer hover:border-cyan-500 transition-all duration-200"
+                             >
                                <img
                                  src={imgUrl}
                                  className="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity"
                                  onError={(e) => {
-                                   // 如果图片加载失败，使用占位符
                                    (e.target as HTMLImageElement).src = `https://picsum.photos/600/600?random=${i}`;
                                  }}
                                  alt={`Sample ${i + 1}`}
                                />
+                               {/* 标注叠加层（仅在检测格式且开启时显示） */}
+                               {(() => {
+                                 const currentDataset = datasets.find(d => d.id === selectedDsId);
+                                 const isDetection = ['yolo', 'coco', 'voc'].includes(
+                                   currentDataset?.type?.toLowerCase() || ''
+                                 );
+                                 if (isDetection && showAnnotations) {
+                                   const annotations = annotationsCache.get(`${selectedDsId}_${i}`);
+                                   if (annotations && annotations.length > 0) {
+                                     return (
+                                       <AnnotationOverlay
+                                         annotations={annotations}
+                                         imageWidth={annotations[0]._imageWidth || 640}
+                                         imageHeight={annotations[0]._imageHeight || 640}
+                                         displayWidth={0}  // 会自动适应容器
+                                         displayHeight={0}
+                                         showLabels={false}
+                                       />
+                                     );
+                                   }
+                                 }
+                                 return null;
+                               })()}
                                <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors" />
                              </div>
                            ))
@@ -1415,7 +1661,7 @@ const DatasetManager: React.FC = () => {
                        </div>
 
                        {/* Load More Button - 只在有更多图片时显示 */}
-                       {imageUrls.length > visibleSamples && (
+                       {(selectedClass ? classImages : imageUrls).length > visibleSamples && (
                          <div className="flex justify-center">
                            <button
                              onClick={handleLoadMore}
@@ -1425,7 +1671,7 @@ const DatasetManager: React.FC = () => {
                              {isLoadingMore ? (
                                 <span className="flex items-center"><div className="w-3 h-3 rounded-full border-2 border-slate-500 border-t-transparent animate-spin mr-2"></div> Loading...</span>
                              ) : (
-                                <span className="flex items-center"><ChevronDown size={14} className="mr-1" /> 加载更多 ({imageUrls.length - visibleSamples})</span>
+                                <span className="flex items-center"><ChevronDown size={14} className="mr-1" /> 加载更多 ({(selectedClass ? classImages : imageUrls).length - visibleSamples})</span>
                              )}
                            </button>
                          </div>
@@ -1438,7 +1684,14 @@ const DatasetManager: React.FC = () => {
         </div>
       </div>
 
-      {lightboxImg && <Lightbox src={lightboxImg} onClose={() => setLightboxImg(null)} />}
+      {lightboxImg && (
+        <Lightbox
+          src={lightboxImg}
+          onClose={() => setLightboxImg(null)}
+          datasetId={selectedDsId}
+          datasets={apiDatasets}
+        />
+      )}
 
       {/* Import Dataset Dialog */}
       <ImportDatasetDialog

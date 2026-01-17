@@ -882,14 +882,25 @@ class DatasetService:
                 "image_paths": details.get("image_files", [])  # 保存图像路径列表
             })
         elif best_format["format"] == "classification":
-            # 对于分类格式，_analyze_images的结果直接在details中
+            # 对于分类格式，构造完整的 image_stats 和其他统计信息
             metadata.update({
-                "class_directories": details.get("classes", {}),
+                "class_directories": details.get("class_directories", {}),
                 "structure": details.get("structure", {}),
                 "size_distribution": details.get("size_distribution", {}),
                 "format_distribution": details.get("format_distribution", {}),
                 # 使用完整的图像路径列表
-                "image_paths": details.get("image_paths", [])
+                "image_paths": details.get("image_paths", []),
+                # 构造 image_stats 供前端使用
+                "image_stats": {
+                    "avg_width": details.get("avg_width", 0),
+                    "avg_height": details.get("avg_height", 0),
+                    "width_range": details.get("width_range", [0, 0]),
+                    "height_range": details.get("height_range", [0, 0]),
+                    "total_images": details.get("total_images", 0),
+                    "analyzed_images": details.get("analyzed_images", 0),
+                },
+                # 分类任务标注率总是100%
+                "annotation_rate": 1.0
             })
 
         return metadata
@@ -1592,3 +1603,79 @@ class DatasetService:
             print(f"生成比较建议失败: {e}")
 
         return recommendations
+
+    async def get_images_by_class(
+        self,
+        dataset_path: str,
+        class_name: str,
+        page: int = 1,
+        page_size: int = 20
+    ) -> Dict[str, any]:
+        """
+        获取指定类别的图片（用于分类任务）
+
+        Args:
+            dataset_path: 数据集路径
+            class_name: 类别名称
+            page: 页码
+            page_size: 每页大小
+
+        Returns:
+            图片列表和分页信息
+        """
+        from pathlib import Path
+        from app.utils.image_processor import image_processor
+
+        dataset_path = Path(dataset_path)
+        class_dir = dataset_path / class_name
+
+        if not class_dir.exists():
+            return {
+                'images': [],
+                'total': 0,
+                'page': page,
+                'page_size': page_size,
+                'total_pages': 0,
+                'class_name': class_name
+            }
+
+        # 获取类别目录下的所有图片
+        image_files = []
+        supported_formats = ['.jpg', '.jpeg', '.png', '.bmp', '.webp']
+
+        for ext in supported_formats:
+            image_files.extend(class_dir.glob(f"*{ext}"))
+
+        # 去重（Windows文件系统不区分大小写，glob可能返回重复项）
+        # 使用字典保持去重同时保留顺序
+        image_files = list(dict.fromkeys(image_files))
+
+        # 排序
+        image_files.sort(key=lambda x: x.name)
+
+        # 分页
+        total = len(image_files)
+        start_idx = (page - 1) * page_size
+        end_idx = start_idx + page_size
+        page_files = image_files[start_idx:end_idx]
+
+        # 构建结果
+        images = []
+        for img_file in page_files:
+            info = image_processor.get_image_info(str(img_file))
+            if info:
+                # 添加类别信息
+                info['class_name'] = class_name
+                info['relative_path'] = f"{class_name}/{img_file.name}"
+                images.append(info)
+
+        total_pages = (total + page_size - 1) // page_size if total > 0 else 0
+
+        return {
+            'images': images,
+            'total': total,
+            'page': page,
+            'page_size': page_size,
+            'total_pages': total_pages,
+            'class_name': class_name
+        }

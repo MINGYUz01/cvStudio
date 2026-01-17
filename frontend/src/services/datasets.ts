@@ -437,6 +437,78 @@ class DatasetServiceClass {
     }>(`${this.baseUrl}/${id}/structure?max_depth=${maxDepth}`);
     return response.data;
   }
+
+  /**
+   * 按类别获取图片列表（分类任务）
+   * @param datasetId 数据集ID
+   * @param className 类别名称
+   * @param page 页码
+   * @param pageSize 每页大小
+   * @returns 图片列表和分页信息
+   */
+  async getImagesByClass(
+    datasetId: number,
+    className: string,
+    page: number = 1,
+    pageSize: number = 20
+  ): Promise<{
+    images: any[];
+    total: number;
+    page: number;
+    pageSize: number;
+    totalPages: number;
+    className: string;
+  }> {
+    const response = await apiClient.get<{
+      success: boolean;
+      message: string;
+      data: {
+        images: any[];
+        total: number;
+        page: number;
+        page_size: number;
+        total_pages: number;
+        class_name: string;
+      };
+    }>(`${this.baseUrl}/${datasetId}/images/by-class`, {
+      params: { class_name: className, page, page_size: pageSize }
+    });
+    return {
+      images: response.data.images,
+      total: response.data.total,
+      page: response.data.page,
+      pageSize: response.data.page_size,
+      totalPages: response.data.total_pages,
+      className: response.data.class_name
+    };
+  }
+
+  /**
+   * 获取图片标注数据（用于绘制标注框）
+   * @param datasetId 数据集ID
+   * @param imagePath 图片相对路径
+   * @returns 标注数据
+   */
+  async getImageAnnotations(
+    datasetId: number,
+    imagePath: string
+  ): Promise<{
+    imageWidth: number;
+    imageHeight: number;
+    annotations: any[];
+    format: string;
+  }> {
+    const response = await apiClient.get<{
+      success: boolean;
+      data: {
+        image_width: number;
+        image_height: number;
+        annotations: any[];
+        format: string;
+      };
+    }>(`${this.baseUrl}/${datasetId}/images/${encodeURIComponent(imagePath)}/annotations`);
+    return response.data;
+  }
 }
 
 // 导出单例

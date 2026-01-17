@@ -36,6 +36,7 @@ export interface DatasetItem {
   lastModified: string;
   description?: string;  // 数据集描述
   stats?: DatasetStats;  // 统计信息（从meta中提取）
+  meta?: Record<string, any>;  // 元数据（与rawMeta相同，方便使用）
   rawMeta?: Record<string, any>;  // 原始元数据（用于获取更详细的信息）
   formatStatus: DatasetFormatStatus;  // 格式状态
   formatConfidence: number;            // 格式识别置信度 0-1
@@ -128,6 +129,7 @@ export function adaptDatasetToItem(dataset: Dataset): DatasetItem {
     lastModified: formatAbsoluteDate(dataset.created_at),
     description: dataset.description,
     stats: extractStats(dataset),
+    meta: dataset.meta,  // 添加 meta 字段
     rawMeta: dataset.meta,
     formatStatus,
     formatConfidence,
