@@ -7,6 +7,8 @@ import xml.etree.ElementTree as ET
 from typing import Dict, List, Optional, Tuple
 from pathlib import Path
 
+from app.utils.path_mapper import PathMapper
+
 
 class VOCRecognizer:
     """VOC格式数据集识别器"""
@@ -71,6 +73,43 @@ class VOCRecognizer:
             if confidence < 0.3:
                 result["format"] = "unknown"
                 result["error"] = "未找到足够的VOC格式特征"
+
+            # 构建路径映射
+            images_dir = None
+            labels_dir = None
+
+            # 从structure信息中获取
+            if voc_structure.get("jpegimages_dir"):
+                images_dir = Path(voc_structure["jpegimages_dir"])
+            if voc_structure.get("annotations_dir"):
+                labels_dir = Path(voc_structure["annotations_dir"])
+
+            # 备用：查找其他可能的目录名
+            if not images_dir:
+                for name in ["JPEGImages", "images"]:
+                    if (dataset_path / name).exists():
+                        images_dir = dataset_path / name
+                        break
+            if not labels_dir:
+                for name in ["Annotations", "labels"]:
+                    if (dataset_path / name).exists():
+                        labels_dir = dataset_path / name
+                        break
+
+            # 构建路径映射
+            path_mapping = {}
+            if images_dir and labels_dir:
+                path_mapping = PathMapper.build_path_mapping(
+                    dataset_path, images_dir, labels_dir
+                )
+                # VOC的XML需要验证对应关系
+                correspondence = PathMapper.verify_file_correspondence(
+                    images_dir, labels_dir, label_ext=".xml"
+                )
+                path_mapping.update(correspondence)
+                path_mapping["label_format"] = "xml"
+
+            result["details"]["path_mapping"] = path_mapping
 
         except Exception as e:
             result["error"] = f"识别VOC格式时出错: {str(e)}"

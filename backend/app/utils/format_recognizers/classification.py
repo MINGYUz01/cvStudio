@@ -6,6 +6,8 @@ import os
 from typing import Dict, List, Optional, Tuple
 from pathlib import Path
 
+from app.utils.path_mapper import PathMapper
+
 
 class ClassificationRecognizer:
     """文件夹分类格式数据集识别器"""
@@ -62,6 +64,26 @@ class ClassificationRecognizer:
                     images_info.get("avg_images_per_class", 0)
                 )
                 result["confidence"] = confidence
+
+                # 构建路径映射（分类格式）
+                path_mapping = {
+                    "unified_images": PathMapper.UNIFIED_IMAGE_DIR,
+                    "format": "classification",
+                    "class_directories": {}
+                }
+
+                for class_name, class_info in classes_info.get("class_directories", {}).items():
+                    class_path = Path(class_info.get("path", ""))
+                    if class_path.exists():
+                        try:
+                            rel_path = class_path.relative_to(dataset_path)
+                            path_mapping["class_directories"][class_name] = str(rel_path)
+                        except ValueError:
+                            path_mapping["class_directories"][class_name] = str(class_path)
+
+                path_mapping["num_classes"] = len(path_mapping["class_directories"])
+                result["details"]["path_mapping"] = path_mapping
+
             else:
                 result["confidence"] = 0
                 result["error"] = "不匹配文件夹分类格式结构"

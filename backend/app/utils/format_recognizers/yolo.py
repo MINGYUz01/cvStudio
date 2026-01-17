@@ -14,6 +14,8 @@ try:
 except ImportError:
     YAML_AVAILABLE = False
 
+from app.utils.path_mapper import PathMapper
+
 
 class YOLORecognizer:
     """YOLO格式数据集识别器"""
@@ -117,6 +119,22 @@ class YOLORecognizer:
             if confidence < 0.3:
                 result["format"] = "unknown"
                 result["error"] = "未找到足够的YOLO格式特征文件"
+
+            # 构建路径映射
+            images_dir = dataset_path / "images"
+            labels_dir = dataset_path / "labels"
+
+            path_mapping = {}
+            if images_dir.exists() and labels_dir.exists():
+                path_mapping = PathMapper.build_path_mapping(
+                    dataset_path, images_dir, labels_dir
+                )
+                # 验证文件对应关系
+                correspondence = PathMapper.verify_file_correspondence(images_dir, labels_dir)
+                path_mapping.update(correspondence)
+                path_mapping["label_format"] = "txt"
+
+            result["details"]["path_mapping"] = path_mapping
 
         except Exception as e:
             result["error"] = f"识别YOLO格式时出错: {str(e)}"

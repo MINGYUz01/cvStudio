@@ -7,6 +7,8 @@ import json
 from typing import Dict, List, Optional, Tuple
 from pathlib import Path
 
+from app.utils.path_mapper import PathMapper
+
 
 class COCORecognizer:
     """COCO格式数据集识别器"""
@@ -69,6 +71,35 @@ class COCORecognizer:
             if confidence < 0.3:
                 result["format"] = "unknown"
                 result["error"] = "未找到足够的COCO格式特征"
+
+            # 构建路径映射（COCO格式特殊处理）
+            annotation_file = annotation_files[0] if annotation_files else None
+            images_dir = None
+
+            # 从image_directories中获取第一个
+            if result["details"].get("image_directories"):
+                images_dir = Path(result["details"]["image_directories"][0])
+
+            path_mapping = {}
+            if annotation_file:
+                path_mapping = PathMapper.build_path_mapping(
+                    dataset_path,
+                    images_dir if images_dir else dataset_path,
+                    annotation_file=annotation_file
+                )
+                path_mapping["label_format"] = "json"
+                path_mapping["needs_conversion"] = True  # 标记需要转换为txt格式
+
+                # 从COCO数据中提取对应关系
+                if coco_data:
+                    image_ids = {img["id"]: img.get("file_name", "") for img in coco_data.get("images", [])}
+                    annotation_image_ids = {ann["image_id"] for ann in coco_data.get("annotations", [])}
+                    missing_annotations = len(image_ids) - len(annotation_image_ids)
+
+                    path_mapping["file_pairs"] = len(annotation_image_ids)
+                    path_mapping["missing_labels"] = missing_annotations
+
+            result["details"]["path_mapping"] = path_mapping
 
         except Exception as e:
             result["error"] = f"识别COCO格式时出错: {str(e)}"

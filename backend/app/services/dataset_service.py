@@ -903,6 +903,13 @@ class DatasetService:
                 "annotation_rate": 1.0
             })
 
+        # 提取路径映射信息（所有格式通用）
+        if "path_mapping" in details:
+            metadata["path_mapping"] = details["path_mapping"]
+            # 添加数据集路径以便后续计算
+            if dataset_path:
+                metadata["path_mapping"]["dataset_path"] = str(dataset_path)
+
         return metadata
 
     async def _generate_thumbnails_async(self, dataset_id: int, dataset_path: str):
