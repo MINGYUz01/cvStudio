@@ -61,7 +61,7 @@ export interface WeightCheckpoint {
   name: string;
   display_name: string;
   description?: string;
-  task_type: 'classification' | 'detection' | 'segmentation';
+  task_type: 'classification' | 'detection';
   version: string;
   file_name: string;
   file_size?: number;

@@ -50,7 +50,7 @@ class WeightLibraryService:
 
     def _ensure_directories(self):
         """创建必要的存储目录"""
-        for task_type in ['classification', 'detection', 'segmentation']:
+        for task_type in ['classification', 'detection']:
             task_dir = self.STORAGE_PATH / task_type
             task_dir.mkdir(parents=True, exist_ok=True)
         self.logger.info(f"权重存储目录已准备: {self.STORAGE_PATH}")
@@ -73,7 +73,7 @@ class WeightLibraryService:
         Args:
             file: 上传的文件
             name: 权重名称
-            task_type: 任务类型 (classification/detection/segmentation/auto)
+            task_type: 任务类型 (classification/detection/auto)
             description: 描述
             input_size: 输入尺寸 [height, width]
             class_names: 类别名称列表

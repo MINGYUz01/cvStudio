@@ -1,6 +1,6 @@
 """
 后处理器系统
-支持不同任务类型的后处理逻辑（分类/检测/分割）
+支持不同任务类型的后处理逻辑（分类/检测）
 """
 
 from abc import ABC, abstractmethod
@@ -329,97 +329,6 @@ class ClassificationPostProcessor(PostProcessor):
         return exp_x / exp_x.sum()
 
 
-class SegmentationPostProcessor(PostProcessor):
-    """
-    语义分割后处理器
-
-    处理分割模型的输出：
-    - Argmax获取类别
-    - 生成掩码
-    - 计算各类别占比
-    """
-
-    def process(
-        self,
-        output: Any,
-        image_info: Dict[str, Any],
-        threshold: float = 0.5,
-        class_names: Optional[List[str]] = None,
-        return_mask: bool = True,
-        **kwargs
-    ) -> List[Dict[str, Any]]:
-        """
-        处理分割模型输出
-
-        Args:
-            output: 分割模型输出 [batch, num_classes, height, width] 或 [batch, height, width, num_classes]
-            image_info: 图像信息
-            threshold: 置信度阈值
-            class_names: 类别名称列表
-            return_mask: 是否返回掩码数据
-
-        Returns:
-            分割结果列表，每个类别一个结果
-        """
-        logger.bind(component="segmentation_postprocessor").debug("开始处理分割结果")
-
-        # 转换为numpy
-        output_array = self._normalize_output(output)
-
-        # 移除batch维度
-        if len(output_array.shape) == 4:
-            output_array = output_array[0]
-
-        # 检测格式: CHW 还是 HWC
-        is_chw = output_array.shape[0] < output_array.shape[-1]
-
-        if is_chw:
-            # [num_classes, height, width]
-            num_classes, height, width = output_array.shape
-            # Argmax获取类别
-            class_map = np.argmax(output_array, axis=0)
-        else:
-            # [height, width, num_classes]
-            height, width, num_classes = output_array.shape
-            class_map = np.argmax(output_array, axis=2)
-
-        # 计算各类别的占比
-        unique, counts = np.unique(class_map, return_counts=True)
-        total_pixels = height * width
-
-        results = []
-        for class_id, count in zip(unique, counts):
-            area_percentage = (count / total_pixels) * 100
-
-            # 获取该类别的平均置信度
-            if is_chw:
-                class_probs = output_array[class_id]
-            else:
-                class_probs = output_array[:, :, class_id]
-
-            avg_confidence = float(class_probs[class_map == class_id].mean()) if count > 0 else 0.0
-
-            label = class_names[class_id] if class_names and class_id < len(class_names) else f"class_{class_id}"
-
-            results.append({
-                'type': 'segmentation',
-                'label': label,
-                'class_id': int(class_id),
-                'confidence': avg_confidence,
-                'area_percentage': area_percentage,
-                'pixel_count': int(count)
-            })
-
-        # 按占比排序
-        results.sort(key=lambda x: x['area_percentage'], reverse=True)
-
-        logger.bind(component="segmentation_postprocessor").success(
-            f"处理完成，检测到{len(results)}个类别"
-        )
-
-        return results
-
-
 class PostProcessorFactory:
     """
     后处理器工厂
@@ -430,7 +339,6 @@ class PostProcessorFactory:
     _processors = {
         'detection': DetectionPostProcessor(),
         'classification': ClassificationPostProcessor(),
-        'segmentation': SegmentationPostProcessor(),
     }
 
     @classmethod
@@ -439,7 +347,7 @@ class PostProcessorFactory:
         获取对应任务类型的后处理器
 
         Args:
-            task_type: 任务类型 (detection/classification/segmentation)
+            task_type: 任务类型 (detection/classification)
 
         Returns:
             对应的后处理器实例
@@ -470,6 +378,5 @@ __all__ = [
     'PostProcessor',
     'DetectionPostProcessor',
     'ClassificationPostProcessor',
-    'SegmentationPostProcessor',
     'PostProcessorFactory',
 ]

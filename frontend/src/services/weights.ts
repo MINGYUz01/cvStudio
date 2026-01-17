@@ -10,7 +10,7 @@ import { apiClient } from './api';
 // 类型定义
 // ==============================
 
-export type TaskType = 'classification' | 'detection' | 'segmentation' | 'auto';
+export type TaskType = 'classification' | 'detection' | 'auto';
 
 export type Framework = 'pytorch' | 'onnx';
 

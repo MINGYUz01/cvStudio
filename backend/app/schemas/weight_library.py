@@ -15,7 +15,7 @@ class WeightLibraryBase(BaseModel):
     """权重库基础模式"""
     name: str = Field(..., min_length=1, max_length=100, description="权重名称")
     description: Optional[str] = Field(None, max_length=1000, description="权重描述")
-    task_type: str = Field(..., description="任务类型：classification/detection/segmentation")
+    task_type: str = Field(..., description="任务类型：classification/detection")
     version: str = Field("1.0", max_length=20, description="版本号")
 
 
@@ -88,7 +88,7 @@ class WeightLibraryList(BaseModel):
 class WeightUploadRequest(BaseModel):
     """权重上传请求模式"""
     name: str = Field(..., min_length=1, max_length=100, description="权重名称")
-    task_type: str = Field(..., description="任务类型：classification/detection/segmentation/auto")
+    task_type: str = Field(..., description="任务类型：classification/detection/auto")
     description: Optional[str] = Field(None, max_length=1000, description="权重描述")
     input_size: Optional[List[int]] = Field(None, description="输入尺寸 [height, width]")
     class_names: Optional[List[str]] = Field(None, description="类别名称列表")

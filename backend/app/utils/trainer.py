@@ -279,7 +279,7 @@ class Trainer:
             current_metric = metrics.get("val_acc", 0.0)
         elif task_type == "classification":
             current_metric = metrics.get("val_acc", 0.0)
-        else:  # segmentation
+        else:
             current_metric = metrics.get("val_acc", 0.0)
 
         is_best = current_metric > self.best_metric

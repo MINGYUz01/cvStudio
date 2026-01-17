@@ -13,7 +13,7 @@ class WeightLibrary(Base):
     """
     权重库模型
 
-    存储上传的权重文件信息，支持分类、检测、分割三种任务类型
+    存储上传的权重文件信息，支持分类、检测两种任务类型
     """
     __tablename__ = "weight_library"
 
@@ -24,7 +24,7 @@ class WeightLibrary(Base):
     name = Column(String(100), nullable=False, index=True, comment="权重名称")
     description = Column(Text, nullable=True, comment="权重描述")
 
-    # 任务类型：classification/detection/segmentation
+    # 任务类型：classification/detection
     task_type = Column(String(50), nullable=False, index=True, comment="任务类型")
 
     # 版本管理

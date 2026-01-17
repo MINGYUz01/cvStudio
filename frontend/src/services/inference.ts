@@ -10,7 +10,7 @@ import { apiClient } from './api';
 /**
  * 任务类型
  */
-export type TaskType = 'classification' | 'detection' | 'segmentation' | 'auto';
+export type TaskType = 'classification' | 'detection' | 'auto';
 
 /**
  * 推理模式
@@ -94,7 +94,7 @@ export interface WeightVersionHistory {
  * 推理结果
  */
 export interface InferenceResult {
-  type: 'detection' | 'classification' | 'segmentation';
+  type: 'detection' | 'classification';
   bbox?: [number, number, number, number]; // x1, y1, x2, y2
   label?: string;
   class_id?: number;
@@ -605,10 +605,9 @@ class InferenceServiceClass {
    * @returns 中文名称
    */
   getTaskTypeName(taskType: TaskType): string {
-    const names: Record<TaskType, string> = {
+    const names: Record<string, string> = {
       classification: '分类',
       detection: '检测',
-      segmentation: '分割',
       auto: '自动检测'
     };
     return names[taskType] || taskType;
@@ -620,10 +619,9 @@ class InferenceServiceClass {
    * @returns 颜色类名
    */
   getTaskTypeColor(taskType: TaskType): string {
-    const colors: Record<TaskType, string> = {
+    const colors: Record<string, string> = {
       classification: 'text-purple-400',
       detection: 'text-cyan-400',
-      segmentation: 'text-emerald-400',
       auto: 'text-amber-400'
     };
     return colors[taskType] || 'text-slate-400';
@@ -635,10 +633,9 @@ class InferenceServiceClass {
    * @returns 背景颜色类名
    */
   getTaskTypeBgColor(taskType: TaskType): string {
-    const colors: Record<TaskType, string> = {
+    const colors: Record<string, string> = {
       classification: 'bg-purple-500/10 border-purple-500/30',
       detection: 'bg-cyan-500/10 border-cyan-500/30',
-      segmentation: 'bg-emerald-500/10 border-emerald-500/30',
       auto: 'bg-amber-500/10 border-amber-500/30'
     };
     return colors[taskType] || 'bg-slate-500/10 border-slate-500/30';

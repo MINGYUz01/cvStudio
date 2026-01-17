@@ -1,6 +1,6 @@
 """
 任务类型检测器
-根据模型输出形状自动推断任务类型（分类/检测/分割）
+根据模型输出形状自动推断任务类型（分类/检测）
 """
 
 from typing import Optional, Tuple, Any, List
@@ -24,7 +24,7 @@ class TaskDetector(ABC):
             device: 运行设备
 
         Returns:
-            任务类型：classification/detection/segmentation
+            任务类型：classification/detection
         """
         pass
 
@@ -37,7 +37,7 @@ class TaskDetector(ABC):
             shape: 模型输出形状
 
         Returns:
-            任务类型：classification/detection/segmentation/unknown
+            任务类型：classification/detection/unknown
         """
         ndim = len(shape)
         logger.bind(component="task_detector").debug(f"分析输出形状: {shape}, ndim={ndim}")
@@ -72,17 +72,15 @@ class TaskDetector(ABC):
 
         elif ndim == 4:
             # [batch, num_classes, height, width] 或 [batch, height, width, num_classes]
+            # 分类模型可能在某些情况下返回4维输出
             batch, dim1, dim2, dim3 = shape
 
-            # 检测是否为分割输出（空间维度较大）
-            spatial_dims = (dim2, dim3) if dim1 < dim2 and dim1 < dim3 else (dim1, dim2)
+            # 可能的分类: [batch, num_classes, height, width] 其中height=width=1
+            if (dim1 <= 10000 and dim2 == 1 and dim3 == 1) or (dim3 <= 10000 and dim1 == 1 and dim2 == 1):
+                return "classification"
 
-            if min(spatial_dims) >= 16:  # 合理的特征图尺寸
-                return "segmentation"
-
-            # 如果第三个维度是类别数且很小，可能是 NHWC 格式的分割
-            if dim3 <= 1000 and dim2 >= 16:
-                return "segmentation"
+            # 如果是较大维度的4维输出，可能是检测模型
+            return "detection"
 
         logger.bind(component="task_detector").warning(f"无法确定任务类型，输出形状: {shape}")
         return "unknown"
@@ -96,7 +94,7 @@ class TaskDetector(ABC):
             output: 模型输出
 
         Returns:
-            任务类型：classification/detection/segmentation
+            任务类型：classification/detection
         """
         # 转换为numpy进行分析
         if isinstance(output, torch.Tensor):
@@ -142,7 +140,7 @@ class PyTorchTaskDetector(TaskDetector):
             input_size: 输入尺寸 (batch, channels, height, width)
 
         Returns:
-            任务类型：classification/detection/segmentation
+            任务类型：classification/detection
         """
         logger.bind(component="task_detector").info("开始检测PyTorch模型任务类型")
 
@@ -198,7 +196,7 @@ class ONNXTaskDetector(TaskDetector):
             device: 运行设备（未使用，ONNX有自己的提供者）
 
         Returns:
-            任务类型：classification/detection/segmentation
+            任务类型：classification/detection
         """
         logger.bind(component="task_detector").info("开始检测ONNX模型任务类型")
 
@@ -255,7 +253,7 @@ class TaskTypeDetector:
             input_size: 输入尺寸 (仅用于PyTorch)
 
         Returns:
-            任务类型：classification/detection/segmentation/unknown
+            任务类型：classification/detection/unknown
         """
         if model_type == "pytorch":
             return PyTorchTaskDetector.detect(model, device, input_size)
@@ -274,7 +272,7 @@ class TaskTypeDetector:
             shape: 输出形状元组
 
         Returns:
-            任务类型：classification/detection/segmentation/unknown
+            任务类型：classification/detection/unknown
         """
         return TaskDetector.detect_from_output_shape(shape)
 
@@ -292,7 +290,6 @@ class TaskTypeDetector:
         sizes = {
             "classification": (224, 224),
             "detection": (640, 640),
-            "segmentation": (512, 512),
         }
         return sizes.get(task_type, (224, 224))
 
@@ -317,10 +314,6 @@ class TaskTypeDetector:
                 "iou_threshold": 0.45,
                 "max_detections": 300,
             },
-            "segmentation": {
-                "threshold": 0.5,
-                "blend_alpha": 0.5,
-            },
         }
         return params.get(task_type, {})
 
@@ -328,18 +321,15 @@ class TaskTypeDetector:
 # 任务类型常量
 TASK_TYPE_CLASSIFICATION = "classification"
 TASK_TYPE_DETECTION = "detection"
-TASK_TYPE_SEGMENTATION = "segmentation"
 TASK_TYPE_UNKNOWN = "unknown"
 
 TASK_TYPES = [
     TASK_TYPE_CLASSIFICATION,
     TASK_TYPE_DETECTION,
-    TASK_TYPE_SEGMENTATION,
 ]
 
 TASK_TYPE_NAMES = {
     TASK_TYPE_CLASSIFICATION: "图像分类",
     TASK_TYPE_DETECTION: "目标检测",
-    TASK_TYPE_SEGMENTATION: "语义分割",
     TASK_TYPE_UNKNOWN: "未知类型",
 }

@@ -9,7 +9,7 @@ import { apiClient } from './api';
 /**
  * 任务类型
  */
-export type TaskType = 'detection' | 'classification' | 'segmentation';
+export type TaskType = 'detection' | 'classification';
 
 /**
  * 训练状态

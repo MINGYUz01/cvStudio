@@ -27,12 +27,6 @@ class TrainingConfigParser:
                 "dropout_rate"
             ]
         },
-        "segmentation": {
-            "required": ["epochs", "batch_size", "image_size", "optimizer"],
-            "optional": [
-                "learning_rate", "weight_decay", "loss_type", "dice_weight"
-            ]
-        }
     }
 
     def __init__(self):
@@ -177,13 +171,6 @@ class TrainingConfigParser:
             task_params = {
                 "label_smoothing": config.get("label_smoothing", 0.0),
                 "dropout_rate": config.get("dropout_rate", 0.0),
-            }
-
-        elif task_type == "segmentation":
-            # 分割任务特定参数
-            task_params = {
-                "loss_type": config.get("loss_type", "ce"),
-                "dice_weight": config.get("dice_weight", 0.5),
             }
 
         return task_params

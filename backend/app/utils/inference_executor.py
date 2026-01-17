@@ -24,7 +24,7 @@ class InferenceExecutor:
     - 图像预处理和后处理
     - 性能指标收集
     - 支持PyTorch和ONNX模型
-    - 支持分类、检测、分割三种任务类型
+    - 支持分类、检测两种任务类型
     """
 
     def __init__(
@@ -43,7 +43,7 @@ class InferenceExecutor:
             model: 加载的模型
             model_type: 模型类型（'pytorch'或'onnx'）
             device: 推理设备
-            task_type: 任务类型（'classification'/'detection'/'segmentation'）
+            task_type: 任务类型（'classification'/'detection'）
             class_names: 类别名称列表
             config: 推理配置
         """
@@ -201,8 +201,6 @@ class InferenceExecutor:
         # 根据任务类型选择后处理器
         if self.task_type == 'classification':
             results = self._postprocess_classification(output, confidence_threshold)
-        elif self.task_type == 'segmentation':
-            results = self._postprocess_segmentation(output, image_info['original_size'])
         else:  # detection
             results = self._postprocess_detection(output, confidence_threshold, iou_threshold)
 
@@ -258,74 +256,6 @@ class InferenceExecutor:
                     'label': label,
                     'class_id': int(idx),
                     'confidence': prob
-                })
-
-        return results
-
-    def _postprocess_segmentation(
-        self,
-        output: Any,
-        original_size: tuple
-    ) -> List[Dict[str, Any]]:
-        """
-        分割任务后处理：生成掩码数据
-
-        Args:
-            output: 模型输出
-            original_size: 原始图像尺寸 (width, height)
-
-        Returns:
-            分割结果列表
-        """
-        results = []
-
-        # 转换为numpy格式
-        if self.model_type == 'pytorch':
-            if isinstance(output, (list, tuple)):
-                output = output[0]
-            if torch.is_tensor(output):
-                output = output.cpu().numpy()
-
-        # 处理输出形状
-        if len(output.shape) == 4:  # [batch, classes, height, width]
-            output = output[0]  # 移除batch维度
-            class_maps = output
-        elif len(output.shape) == 3:  # [classes, height, width]
-            class_maps = output
-        else:
-            # [height, width] - 单通道掩码
-            mask = output
-            results.append({
-                'label': 'mask',
-                'class_id': 0,
-                'mask_shape': list(mask.shape),
-                'pixel_count': int(mask.sum())
-            })
-            return results
-
-        # 为每个类别计算掩码信息
-        for class_id in range(min(len(class_maps), 32)):  # 限制最多处理32个类别
-            if class_id >= len(class_maps):
-                break
-
-            mask = class_maps[class_id]
-
-            # 将掩码resize到原始尺寸
-            if mask.shape[:2] != (original_size[1], original_size[0]):
-                mask = cv2.resize(mask, (original_size[0], original_size[1]))
-
-            # 二值化掩码
-            binary_mask = (mask > 0.5).astype(np.uint8)
-            pixel_count = int(binary_mask.sum())
-            area_percentage = (pixel_count / binary_mask.size) * 100
-
-            if area_percentage > 0.1:  # 只保留占比大于0.1%的掩码
-                label = self.class_names[class_id] if class_id < len(self.class_names) else f'class_{class_id}'
-                results.append({
-                    'label': label,
-                    'class_id': class_id,
-                    'area_percentage': round(area_percentage, 2),
-                    'pixel_count': pixel_count
                 })
 
         return results

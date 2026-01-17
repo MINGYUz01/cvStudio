@@ -61,7 +61,7 @@ async def weights_root():
 async def upload_weight(
     file: UploadFile = File(..., description="权重文件"),
     name: str = Form(..., description="权重名称"),
-    task_type: str = Form(..., description="任务类型：classification/detection/segmentation/auto"),
+    task_type: str = Form(..., description="任务类型：classification/detection/auto"),
     description: Optional[str] = Form(None, description="权重描述"),
     input_size: Optional[str] = Form(None, description="输入尺寸JSON字符串，如 [224, 224]"),
     class_names: Optional[str] = Form(None, description="类别名称JSON字符串，如 [\"cat\", \"dog\"]"),
@@ -72,7 +72,7 @@ async def upload_weight(
     上传权重文件到权重库
 
     支持的文件格式：.pt, .pth, .pkl, .onnx
-    支持的任务类型：classification, detection, segmentation
+    支持的任务类型：classification, detection
     自动检测：task_type设为"auto"时自动检测任务类型
 
     返回创建的权重记录信息。
@@ -331,7 +331,7 @@ async def list_weights_by_task(
     """
     try:
         # 验证任务类型
-        valid_types = ['classification', 'detection', 'segmentation']
+        valid_types = ['classification', 'detection']
         if task_type not in valid_types:
             raise HTTPException(400, f"无效的任务类型，应为: {', '.join(valid_types)}")
 

@@ -91,25 +91,6 @@ const INITIAL_EXPERIMENTS: Experiment[] = [
     }
   },
   {
-    id: '3',
-    name: 'UNet-RoadSegmentation-v1',
-    task: 'segmentation',
-    model: 'UNet',
-    dataset: 'Urban_Traffic_V2',
-    augmentation: 'Weather Robustness',
-    status: 'failed',
-    duration: '1h 30m',
-    accuracy: '0.00',
-    startedAt: '3 hours ago',
-    config: {
-      batch_size: 8,
-      epochs: 100,
-      learning_rate: 0.0001,
-      optimizer: 'AdamW',
-      input_size: 512,
-    }
-  },
-  {
     id: '4',
     name: 'YOLOv5-COCO-Pretrain',
     task: 'detection',
@@ -138,7 +119,7 @@ const TRAINING_CHART_DATA = Array.from({ length: 50 }, (_, i) => ({
   metric: Math.min(0.95, 0.3 + i * 0.012 + Math.random() * 0.05),
 }));
 
-type TaskType = 'detection' | 'classification' | 'segmentation';
+type TaskType = 'detection' | 'classification';
 type ExpStatus = 'running' | 'completed' | 'failed' | 'queued' | 'paused';
 
 interface Experiment {
@@ -169,7 +150,7 @@ const TRAINING_SCHEMA = {
         lr_scheduler: { value: "Cosine", ui: { type: "select", label: "LR Scheduler", options: ["None", "Step", "Cosine", "ReduceOnPlateau"] } },
         weight_decay: { value: 0.0001, ui: { type: "number", label: "Weight Decay", format: "scientific" } },
         
-        input_size: { value: 640, ui: { type: "number", label: "Input Size (px)", hint: "检测/分割通常较大" } },
+        input_size: { value: 640, ui: { type: "number", label: "Input Size (px)", hint: "检测通常较大" } },
         num_classes: { value: 80, ui: { type: "number", label: "Num Classes", min: 1 } },
         pretrained: { 
           value: "IMAGENET_1K_V1", 
@@ -210,17 +191,6 @@ const TRAINING_SCHEMA = {
         nms_iou_threshold: { value: 0.5, ui: { type: "slider", label: "NMS IoU Threshold", min: 0.3, max: 0.9, step: 0.05 } },
         max_detections: { value: 100, ui: { type: "number", label: "Max Detections" } }
       }
-    },
-    segmentation: {
-      title: "分割特定参数 (Segmentation)",
-      fields: {
-        seg_loss: { value: "CrossEntropy", ui: { type: "select", label: "Loss Function", options: ["CrossEntropy", "Dice", "CrossEntropy+Dice"] } },
-        dice_weight: { 
-           value: 1.0, 
-           ui: { type: "number", label: "Dice Weight", visible_when: { field: "seg_loss", value: ["Dice", "CrossEntropy+Dice"] } } 
-        },
-        ignore_index: { value: 255, ui: { type: "number", label: "Ignore Index" } }
-      }
     }
   }
 };
@@ -257,7 +227,6 @@ const TaskIcon: React.FC<{ task: TaskType }> = ({ task }) => {
     switch(task) {
         case 'detection': return <span title="Object Detection"><Target size={16} className="text-rose-400" /></span>;
         case 'classification': return <span title="Image Classification"><Tag size={16} className="text-cyan-400" /></span>;
-        case 'segmentation': return <span title="Semantic Segmentation"><Shapes size={16} className="text-purple-400" /></span>;
     }
 };
 
@@ -911,8 +880,8 @@ const TrainingMonitor: React.FC = () => {
                             {/* Task Selector */}
                             <div>
                                 <label className="block text-[10px] font-bold text-slate-500 uppercase mb-2">任务类型 (Task)</label>
-                                <div className="grid grid-cols-3 gap-2">
-                                    {(['detection', 'classification', 'segmentation'] as TaskType[]).map(t => (
+                                <div className="grid grid-cols-2 gap-2">
+                                    {(['detection', 'classification'] as TaskType[]).map(t => (
                                         <div 
                                         key={t}
                                         onClick={() => setFormTask(t)}
@@ -943,7 +912,6 @@ const TrainingMonitor: React.FC = () => {
                                             <option value="">Select Architecture...</option>
                                             {formTask === 'detection' && <><option>YOLOv8</option><option>YOLOv5</option><option>Faster-RCNN</option></>}
                                             {formTask === 'classification' && <><option>ResNet50</option><option>ViT-Base</option><option>EfficientNet</option></>}
-                                            {formTask === 'segmentation' && <><option>UNet</option><option>DeepLabV3</option><option>Mask-RCNN</option></>}
                                         </select>
                                         <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none" />
                                     </div>

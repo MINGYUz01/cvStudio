@@ -689,27 +689,6 @@ const InferenceView: React.FC = () => {
           )}
         </div>
       );
-    } else if (taskType === 'segmentation') {
-      return (
-        <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar">
-          <div className="text-xs text-slate-500 uppercase mb-2">分割掩码</div>
-          {results.length === 0 ? (
-            <p className="text-sm text-slate-500 text-center">未检测到分割区域</p>
-          ) : (
-            results.map((result: any, idx: number) => (
-              <div key={idx} className="flex items-center justify-between p-2 rounded hover:bg-slate-900/50">
-                <div className="flex items-center">
-                  <div className="w-4 h-4 rounded mr-3 bg-emerald-500 border border-white/10 shadow-sm"></div>
-                  <span className="text-sm text-slate-300">{result.label || `class_${result.class_id}`}</span>
-                </div>
-                <span className="text-xs font-mono text-slate-500">
-                  {result.area_percentage ? `${result.area_percentage}%` : `${result.pixel_count || 0} px`}
-                </span>
-              </div>
-            ))
-          )}
-        </div>
-      );
     }
   };
 
@@ -1123,7 +1102,6 @@ const InferenceView: React.FC = () => {
                  <h3 className="font-bold text-white flex items-center capitalize">
                    {taskType === 'detection' && <FileText size={18} className="mr-2 text-slate-400" />}
                    {taskType === 'classification' && <Activity size={18} className="mr-2 text-slate-400" />}
-                   {taskType === 'segmentation' && <Layers size={18} className="mr-2 text-slate-400" />}
                    {taskType} Results
                  </h3>
                </div>

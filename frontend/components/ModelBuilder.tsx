@@ -239,8 +239,7 @@ const ModelBuilder: React.FC = () => {
           created_at: w.created_at,
           // Legacy fields for UI compatibility
           architecture: w.task_type === 'classification' ? 'Classifier' :
-                       w.task_type === 'detection' ? 'YOLOv8' :
-                       w.task_type === 'segmentation' ? 'SegNet' : 'Unknown',
+                       w.task_type === 'detection' ? 'YOLOv8' : 'Unknown',
           format: w.framework === 'pytorch' ? 'PyTorch' : 'ONNX',
           size: w.file_size_mb ? `${w.file_size_mb} MB` : 'Unknown',
         }));
@@ -1868,12 +1867,10 @@ const ModelBuilder: React.FC = () => {
                                                 <span className={`px-2 py-1 rounded text-xs font-medium ${
                                                     w.task_type === 'classification' ? 'bg-cyan-900/30 text-cyan-400 border border-cyan-800' :
                                                     w.task_type === 'detection' ? 'bg-purple-900/30 text-purple-400 border border-purple-800' :
-                                                    w.task_type === 'segmentation' ? 'bg-amber-900/30 text-amber-400 border border-amber-800' :
                                                     'bg-slate-800 text-slate-400'
                                                 }`}>
                                                     {w.task_type === 'classification' ? '分类' :
-                                                     w.task_type === 'detection' ? '检测' :
-                                                     w.task_type === 'segmentation' ? '分割' : w.task_type}
+                                                     w.task_type === 'detection' ? '检测' : w.task_type}
                                                 </span>
                                             </td>
                                             <td className="p-4 text-slate-400">{w.format || w.framework}</td>
@@ -2240,7 +2237,6 @@ const WeightUploadDialog: React.FC<WeightUploadDialogProps> = ({
               <option value="auto">自动检测</option>
               <option value="classification">分类 (Classification)</option>
               <option value="detection">检测 (Detection)</option>
-              <option value="segmentation">分割 (Segmentation)</option>
             </select>
             <p className="text-xs text-slate-500 mt-1">
               {taskType === 'auto' ? '系统将根据模型结构自动检测任务类型' : ''}

@@ -1,6 +1,6 @@
 """
 预处理器系统
-支持不同任务类型的预处理逻辑（分类/检测/分割）
+支持不同任务类型的预处理逻辑（分类/检测）
 """
 
 from abc import ABC, abstractmethod
@@ -272,128 +272,6 @@ class DetectionPreProcessor(PreProcessor):
         return tensor
 
 
-class SegmentationPreProcessor(PreProcessor):
-    """
-    语义分割预处理器
-
-    与分类类似，但可能需要保持更高的空间分辨率：
-    - 保持宽高比resize
-    - 或直接resize（常用）
-    """
-
-    DEFAULT_SIZE = (512, 512)
-    DEFAULT_MEAN = [0.485, 0.456, 0.406]
-    DEFAULT_STD = [0.229, 0.224, 0.225]
-
-    def __init__(self, config: Optional[Dict[str, Any]] = None):
-        """
-        初始化分割预处理器
-
-        Args:
-            config: 配置字典，可包含：
-                - input_size: 输入尺寸 (height, width)
-                - keep_ratio: 是否保持宽高比 (默认False)
-                - mean: 归一化均值
-                - std: 归一化标准差
-        """
-        self.config = config or {}
-        self.input_size = tuple(self.config.get('input_size', self.DEFAULT_SIZE))
-        self.keep_ratio = self.config.get('keep_ratio', False)
-        self.mean = self.config.get('normalize', {}).get('mean', self.DEFAULT_MEAN)
-        self.std = self.config.get('normalize', {}).get('std', self.DEFAULT_STD)
-
-    def process(
-        self,
-        image: Image.Image,
-        device: str = "cpu"
-    ) -> Tuple[torch.Tensor, Dict[str, Any]]:
-        """
-        预处理图像用于分割
-
-        Args:
-            image: PIL图像
-            device: 目标设备
-
-        Returns:
-            (预处理后的tensor, 图像信息)
-        """
-        original_size = self._get_original_size(image)
-        image = self._ensure_rgb(image)
-
-        if self.keep_ratio:
-            # 类似letterbox，但返回更多信息
-            tensor, scale_info = self._resize_with_ratio(image)
-        else:
-            # 直接resize
-            image = image.resize(self.input_size, Image.BILINEAR)
-            scale_info = {
-                'scale': (
-                    self.input_size[1] / original_size[0],
-                    self.input_size[0] / original_size[1]
-                ),
-                'pad': (0, 0)
-            }
-
-            # 转换为tensor
-            tensor = torch.from_numpy(np.array(image)).float() / 255.0
-
-        # HWC -> CHW
-        tensor = tensor.permute(2, 0, 1)
-
-        # 归一化
-        mean = torch.tensor(self.mean).view(3, 1, 1)
-        std = torch.tensor(self.std).view(3, 1, 1)
-        tensor = (tensor - mean) / std
-
-        # 添加batch维度
-        tensor = tensor.unsqueeze(0)
-
-        # 移动到设备
-        if 'cuda' in device or 'mps' in device:
-            tensor = tensor.to(device)
-
-        image_info = {
-            'original_size': original_size,
-            'input_size': self.input_size,
-            'scale': scale_info['scale'],
-            'pad': scale_info['pad'],
-        }
-
-        logger.bind(component="segmentation_preprocessor").debug(
-            f"分割预处理完成，原始尺寸={original_size}，输入尺寸={self.input_size}"
-        )
-
-        return tensor, image_info
-
-    def _resize_with_ratio(self, image: Image.Image) -> Tuple[torch.Tensor, Dict[str, Any]]:
-        """保持宽高比resize"""
-        img_w, img_h = image.size
-        target_w, target_h = self.input_size
-
-        scale = min(target_w / img_w, target_h / img_h)
-        new_w = int(img_w * scale)
-        new_h = int(img_h * scale)
-
-        resized = image.resize((new_w, new_h), Image.BILINEAR)
-
-        # 创建画布
-        canvas = Image.new('RGB', (target_w, target_h), (0, 0, 0))
-
-        pad_left = (target_w - new_w) // 2
-        pad_top = (target_h - new_h) // 2
-        canvas.paste(resized, (pad_left, pad_top))
-
-        # 转换为tensor
-        tensor = torch.from_numpy(np.array(canvas)).float() / 255.0
-
-        scale_info = {
-            'scale': (scale, scale),
-            'pad': (pad_left, pad_top)
-        }
-
-        return tensor, scale_info
-
-
 class PreProcessorFactory:
     """
     预处理器工厂
@@ -407,7 +285,7 @@ class PreProcessorFactory:
         创建对应任务类型的预处理器
 
         Args:
-            task_type: 任务类型 (detection/classification/segmentation)
+            task_type: 任务类型 (detection/classification)
             config: 配置字典
 
         Returns:
@@ -420,8 +298,6 @@ class PreProcessorFactory:
             return DetectionPreProcessor(config)
         elif task_type == 'classification':
             return ClassificationPreProcessor(config)
-        elif task_type == 'segmentation':
-            return SegmentationPreProcessor(config)
         else:
             raise ValueError(f"不支持的任务类型: {task_type}")
 
@@ -449,14 +325,6 @@ class PreProcessorFactory:
                 'input_size': DetectionPreProcessor.DEFAULT_SIZE,
                 'letterbox': True,
             },
-            'segmentation': {
-                'input_size': SegmentationPreProcessor.DEFAULT_SIZE,
-                'keep_ratio': False,
-                'normalize': {
-                    'mean': SegmentationPreProcessor.DEFAULT_MEAN,
-                    'std': SegmentationPreProcessor.DEFAULT_STD,
-                }
-            },
         }
         return configs.get(task_type, {})
 
@@ -466,6 +334,5 @@ __all__ = [
     'PreProcessor',
     'ClassificationPreProcessor',
     'DetectionPreProcessor',
-    'SegmentationPreProcessor',
     'PreProcessorFactory',
 ]

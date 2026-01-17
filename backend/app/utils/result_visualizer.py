@@ -1,6 +1,6 @@
 """
 结果可视化工具
-在图像上绘制推理结果（检测框、分割掩码、分类标签）
+在图像上绘制推理结果（检测框、分类标签）
 """
 
 from typing import Dict, List, Any, Optional, Tuple
@@ -30,7 +30,7 @@ class ResultVisualizer:
     """
     推理结果可视化器
 
-    在图像上绘制检测框、分割掩码、分类标签等
+    在图像上绘制检测框、分类标签等
     """
 
     def __init__(self, colors: Optional[List[Tuple[int, int, int]]] = None):
@@ -103,52 +103,6 @@ class ResultVisualizer:
         self.logger.debug(f"绘制了{len(results)}个检测框")
         return output
 
-    def draw_segmentation(
-        self,
-        image: np.ndarray,
-        results: List[Dict[str, Any]],
-        mask: Optional[np.ndarray] = None,
-        alpha: float = 0.5,
-        show_contours: bool = True,
-        contour_thickness: int = 2
-    ) -> np.ndarray:
-        """
-        绘制分割掩码
-
-        Args:
-            image: 输入图像（BGR格式）
-            results: 分割结果列表
-            mask: 分割掩码（可选）
-            alpha: 掩码透明度
-            show_contours: 是否显示轮廓
-            contour_thickness: 轮廓线宽
-
-        Returns:
-            绘制后的图像
-        """
-        output = image.copy()
-
-        if mask is not None:
-            # 使用提供的掩码
-            colored_mask = self._mask_to_overlay(mask)
-            output = cv2.addWeighted(output, 1 - alpha, colored_mask, alpha, 0)
-        elif results:
-            # 从结果生成掩码（需要像素级信息）
-            # 这里简化处理，只绘制边框区域
-            pass
-
-        if show_contours and mask is not None:
-            # 绘制轮廓
-            contours, _ = cv2.findContours(
-                mask.astype(np.uint8),
-                cv2.RETR_EXTERNAL,
-                cv2.CHAIN_APPROX_SIMPLE
-            )
-            cv2.drawContours(output, contours, -1, (0, 255, 0), contour_thickness)
-
-        self.logger.debug("绘制了分割掩码")
-        return output
-
     def draw_classification(
         self,
         image: np.ndarray,
@@ -218,8 +172,6 @@ class ResultVisualizer:
             return self.draw_detections(image, results, **kwargs)
         elif task_type == 'classification':
             return self.draw_classification(image, results, **kwargs)
-        elif task_type == 'segmentation':
-            return self.draw_segmentation(image, results, **kwargs)
         else:
             self.logger.warning(f"未知任务类型: {task_type}")
             return image
