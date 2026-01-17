@@ -21,7 +21,7 @@ from app.api.v1 import auth, datasets, models, training, inference, users, webso
 from app.core.exceptions import setup_exception_handlers
 from app.utils.metrics_collector import collector
 from app.api.websocket import manager
-from app.database import create_tables
+from app.database import create_tables, init_admin_user
 from app.models import User, Dataset, Model, WeightLibrary, TrainingRun, Checkpoint, InferenceJob, AugmentationStrategy
 
 
@@ -36,6 +36,9 @@ async def lifespan(app: FastAPI):
     # 创建数据库表（如果不存在）
     create_tables()
     print("📊 数据库表已就绪")
+
+    # 初始化默认管理员用户（如果不存在）
+    init_admin_user()
 
     # 启动系统指标收集器
     async def metrics_callback(metrics):

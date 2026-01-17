@@ -83,6 +83,11 @@ class Settings(BaseSettings):
     # 性能监控
     ENABLE_METRICS: bool = True
     METRICS_PORT: int = 9090
+
+    # 默认管理员账户配置
+    DEFAULT_ADMIN_USERNAME: str = "admin"
+    DEFAULT_ADMIN_EMAIL: str = "admin@cvstudio.example.com"
+    DEFAULT_ADMIN_PASSWORD: str = "admin123"
     
     @validator("ALLOWED_ORIGINS", pre=True)
     def assemble_cors_origins(cls, v):
