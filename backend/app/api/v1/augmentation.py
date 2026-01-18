@@ -443,6 +443,40 @@ async def preview_augmentation(
         raise HTTPException(status_code=500, detail=f"增强预览失败: {str(e)}")
 
 
+def _sample_range_param(value, default=(0, 1)):
+    """
+    从范围参数中采样
+
+    Args:
+        value: 参数值（可能是范围列表或固定值）
+        default: 默认范围
+
+    Returns:
+        采样后的值
+    """
+    import random as rnd
+    if isinstance(value, (list, tuple)) and len(value) == 2:
+        return rnd.uniform(value[0], value[1])
+    return value
+
+
+def _sample_int_range_param(value, default=(0, 10)):
+    """
+    从整数范围参数中采样
+
+    Args:
+        value: 参数值（可能是范围列表或固定值）
+        default: 默认范围
+
+    Returns:
+        采样后的整数值
+    """
+    import random as rnd
+    if isinstance(value, (list, tuple)) and len(value) == 2:
+        return rnd.randint(int(value[0]), int(value[1]))
+    return int(value)
+
+
 def _apply_operator(image, operator_id: str, params: dict, other_images: list = None):
     """
     应用单个增强算子
@@ -459,33 +493,51 @@ def _apply_operator(image, operator_id: str, params: dict, other_images: list = 
     if other_images is None:
         other_images = []
 
-    # 支持概率参数的算子列表（这些算子可能会根据概率跳过执行）
+    import random as rnd
+    import numpy as np
+
+    # 所有支持概率参数的算子
     PROBABILITY_OPERATORS = {
-        "rotate", "scale", "translate", "elastic_transform",
-        "brightness", "contrast", "saturation", "hue_shift",
-        "gamma_correction", "auto_contrast",
-        "gaussian_blur", "motion_blur", "gaussian_noise", "salt_pepper_noise"
+        # 几何变换
+        "horizontal_flip", "vertical_flip", "rotate", "scale", "translate",
+        "shift_scale_rotate", "random_resized_crop", "perspective", "shear",
+        "elastic_transform",
+        # 颜色变换
+        "hsv_color", "brightness", "contrast", "saturation", "hue_shift",
+        "rgb_shift", "to_gray", "gamma_correction", "auto_contrast",
+        # 模糊与噪声
+        "gaussian_blur", "motion_blur", "gaussian_noise", "salt_pepper_noise",
+        # 其他
+        "random_erase", "jpeg_compression", "mosaic", "copy_paste"
     }
 
     # 检查是否执行（基于概率）
     if operator_id in PROBABILITY_OPERATORS:
         probability = params.get("probability", 1.0)
-        import random as rnd
         if rnd.random() > probability:
             return image  # 不执行，返回原图
 
-    # 几何变换类
+    # ==================== 几何变换类 ====================
     if operator_id == "horizontal_flip":
         return image_processor.flip_image(image, horizontal=True, vertical=False)
+
     elif operator_id == "vertical_flip":
         return image_processor.flip_image(image, horizontal=False, vertical=True)
+
     elif operator_id == "rotate":
-        angle = params.get("angle", 0.0)
+        # angle_limit: 角度范围，随机采样
+        angle_limit = params.get("angle_limit", (-15, 15))
+        angle = _sample_range_param(angle_limit, (-15, 15))
         return image_processor.rotate_image(image, angle)
+
     elif operator_id == "scale":
-        factor = params.get("factor", 1.0)
-        return image_processor.scale_image(image, factor)
+        # scale_limit: 缩放因子范围，随机采样
+        scale_limit = params.get("scale_limit", (0.8, 1.2))
+        scale = _sample_range_param(scale_limit, (0.8, 1.2))
+        return image_processor.scale_image(image, scale)
+
     elif operator_id == "crop":
+        # 固定裁剪（使用固定值）
         return image_processor.crop_image(
             image,
             params.get("x", 0),
@@ -493,13 +545,54 @@ def _apply_operator(image, operator_id: str, params: dict, other_images: list = 
             params.get("width", 100),
             params.get("height", 100)
         )
+
     elif operator_id == "translate":
-        return image_processor.translate_image(
-            image,
-            params.get("dx", 0),
-            params.get("dy", 0),
-            params.get("fill_value", 255)
-        )
+        # translate_limit: 平移比例范围，随机采样
+        translate_limit = params.get("translate_limit", (-0.1, 0.1))
+        ratio = _sample_range_param(translate_limit, (-0.1, 0.1))
+        h, w = image.shape[:2]
+        dx = int(ratio * w)
+        dy = int(ratio * h)
+        fill_value = params.get("fill_value", 0)
+        return image_processor.translate_image(image, dx, dy, fill_value)
+
+    elif operator_id == "shift_scale_rotate":
+        # 综合几何变换
+        shift_limit = params.get("shift_limit", (-0.1, 0.1))
+        scale_limit = params.get("scale_limit", (-0.1, 0.1))
+        rotate_limit = params.get("rotate_limit", (-15, 15))
+        border_mode = params.get("border_mode", "reflect")
+
+        h, w = image.shape[:2]
+        shift_x = _sample_range_param(shift_limit, (-0.1, 0.1)) * w
+        shift_y = _sample_range_param(shift_limit, (-0.1, 0.1)) * h
+        scale = 1.0 + _sample_range_param(scale_limit, (-0.1, 0.1))
+        angle = _sample_range_param(rotate_limit, (-15, 15))
+
+        return _shift_scale_rotate(image, shift_x, shift_y, scale, angle, border_mode)
+
+    elif operator_id == "random_resized_crop":
+        # 随机裁剪缩放
+        height = params.get("height", 224)
+        width = params.get("width", 224)
+        scale = params.get("scale", (0.8, 1.0))
+        ratio = params.get("ratio", (0.75, 1.33))
+        return _random_resized_crop(image, height, width, scale, ratio)
+
+    elif operator_id == "perspective":
+        # 透视变换
+        scale = params.get("scale", (0.0, 0.05))
+        intensity = _sample_range_param(scale, (0.0, 0.05))
+        return _perspective_transform_random(image, intensity)
+
+    elif operator_id == "shear":
+        # 剪切变换
+        shear_x = params.get("shear_x", (-10, 10))
+        shear_y = params.get("shear_y", (-10, 10))
+        angle_x = _sample_range_param(shear_x, (-10, 10))
+        angle_y = _sample_range_param(shear_y, (-10, 10))
+        return _shear_transform(image, angle_x, angle_y)
+
     elif operator_id == "elastic_transform":
         return image_processor.elastic_transform(
             image,
@@ -507,69 +600,342 @@ def _apply_operator(image, operator_id: str, params: dict, other_images: list = 
             params.get("sigma", 50.0)
         )
 
-    # 颜色变换类
+    # ==================== 颜色变换类 ====================
+    elif operator_id == "hsv_color":
+        # HSV颜色空间调整
+        h_limit = params.get("h_limit", (-20, 20))
+        s_limit = params.get("s_limit", (-30, 30))
+        v_limit = params.get("v_limit", (-20, 20))
+        h_shift = _sample_range_param(h_limit, (-20, 20))
+        s_shift = _sample_range_param(s_limit, (-30, 30)) / 100.0  # 转换为比例
+        v_shift = _sample_range_param(v_limit, (-20, 20)) / 100.0
+        return _hsv_color_adjust(image, h_shift, s_shift, v_shift)
+
     elif operator_id == "brightness":
-        factor = params.get("factor", 1.0)
+        # 亮度调整
+        limit = params.get("limit", (-0.2, 0.2))
+        factor = 1.0 + _sample_range_param(limit, (-0.2, 0.2))
         return image_processor.adjust_brightness(image, factor)
+
     elif operator_id == "contrast":
-        factor = params.get("factor", 1.0)
+        # 对比度调整
+        limit = params.get("limit", (-0.2, 0.2))
+        factor = 1.0 + _sample_range_param(limit, (-0.2, 0.2))
         return image_processor.adjust_contrast(image, factor)
+
     elif operator_id == "saturation":
-        factor = params.get("factor", 1.0)
+        # 饱和度调整
+        limit = params.get("limit", (-0.3, 0.3))
+        factor = 1.0 + _sample_range_param(limit, (-0.3, 0.3))
         return image_processor.adjust_saturation(image, factor)
+
     elif operator_id == "hue_shift":
-        shift = params.get("shift", 0.0)
+        # 色调偏移
+        shift_limit = params.get("shift_limit", (-20, 20))
+        shift = _sample_range_param(shift_limit, (-20, 20))
         return image_processor.adjust_hue(image, shift)
+
+    elif operator_id == "rgb_shift":
+        # RGB通道偏移
+        r_limit = params.get("r_limit", (-20, 20))
+        g_limit = params.get("g_limit", (-20, 20))
+        b_limit = params.get("b_limit", (-20, 20))
+        r_shift = _sample_range_param(r_limit, (-20, 20))
+        g_shift = _sample_range_param(g_limit, (-20, 20))
+        b_shift = _sample_range_param(b_limit, (-20, 20))
+        return _rgb_shift_adjust(image, r_shift, g_shift, b_shift)
+
+    elif operator_id == "to_gray":
+        # 转灰度
+        return _to_gray_convert(image)
+
     elif operator_id == "gamma_correction":
-        gamma = params.get("gamma", 1.0)
+        # Gamma校正
+        gamma_limit = params.get("gamma_limit", (80, 120))
+        gamma = _sample_range_param(gamma_limit, (80, 120)) / 100.0
         return image_processor.gamma_correction(image, gamma)
+
     elif operator_id == "auto_contrast":
-        cutoff = params.get("cutoff", 0.0)
-        return image_processor.auto_contrast(image, cutoff)
+        cutoff = params.get("cutoff", (0, 20))
+        cutoff_val = _sample_range_param(cutoff, (0, 20))
+        return image_processor.auto_contrast(image, cutoff_val)
 
-    # 模糊与噪声类
+    # ==================== 模糊与噪声类 ====================
     elif operator_id == "gaussian_blur":
-        sigma = params.get("sigma", 0.0)
-        return image_processor.add_gaussian_blur(image, sigma)
-    elif operator_id == "motion_blur":
-        kernel_size = params.get("kernel_size", 15)
-        angle = params.get("angle", 0.0)
-        return image_processor.motion_blur(image, kernel_size, angle)
-    elif operator_id == "gaussian_noise":
-        std = params.get("std", 0.0)
-        return image_processor.add_noise(image, std)
-    elif operator_id == "salt_pepper_noise":
-        amount = params.get("amount", 0.01)
-        return image_processor.add_salt_pepper_noise(image, amount)
+        blur_limit = params.get("blur_limit", (3, 7))
+        kernel_size = _sample_int_range_param(blur_limit, (3, 7))
+        # 确保是奇数
+        if kernel_size % 2 == 0:
+            kernel_size += 1
+        sigma = kernel_size / 3.0  # 根据核大小计算sigma
+        return _gaussian_blur_with_kernel(image, kernel_size, sigma)
 
-    # 其他类
+    elif operator_id == "motion_blur":
+        blur_limit = params.get("blur_limit", (3, 7))
+        angle_range = params.get("angle_range", (0, 360))
+        kernel_size = _sample_int_range_param(blur_limit, (3, 7))
+        if kernel_size % 2 == 0:
+            kernel_size += 1
+        angle = _sample_range_param(angle_range, (0, 360))
+        return image_processor.motion_blur(image, kernel_size, angle)
+
+    elif operator_id == "gaussian_noise":
+        var_limit = params.get("var_limit", (10, 50))
+        variance = _sample_range_param(var_limit, (10, 50))
+        std = np.sqrt(variance)
+        return image_processor.add_noise(image, std)
+
+    elif operator_id == "salt_pepper_noise":
+        amount = params.get("amount", (0.001, 0.05))
+        amount_val = _sample_range_param(amount, (0.001, 0.05))
+        return image_processor.add_salt_pepper_noise(image, amount_val)
+
+    # ==================== 其他类 ====================
     elif operator_id == "random_erase":
-        probability = params.get("probability", 0.5)
         scale = params.get("scale", (0.02, 0.33))
         ratio = params.get("ratio", (0.3, 3.3))
         value = params.get("value", 0)
-        return image_processor.random_erase(image, probability, scale, ratio, value)
+        return image_processor.random_erase(image, 1.0, scale, ratio, value)  # 概率已在前面检查
+
     elif operator_id == "jpeg_compression":
-        quality = params.get("quality", 85)
+        quality_lower = params.get("quality_lower", 70)
+        quality_upper = params.get("quality_upper", 100)
+        quality = rnd.randint(quality_lower, quality_upper)
         return image_processor.jpeg_compression(image, quality)
+
     elif operator_id == "mosaic":
-        # 马赛克增强：将4张图片拼接成1张
-        probability = params.get("probability", 0.5)
-        import random as rnd
-        if rnd.random() > probability:
-            return image  # 不执行，返回原图
+        # 马赛克增强
         scale = params.get("scale", (0.5, 1.5))
         # 将当前图片和其他图片组合
         mosaic_images = [image] + other_images
         return image_processor.mosaic_augment(mosaic_images, scale)
+
     elif operator_id == "copy_paste":
         # Copy-Paste增强
-        probability = params.get("probability", 0.5)
-        import random as rnd
-        if rnd.random() > probability or not other_images:
-            return image  # 不执行或没有其他图片，返回原图
+        if not other_images:
+            return image
         max_objects = params.get("max_objects", 5)
         result, _ = image_processor.copy_paste_augment(image, other_images, max_objects)
         return result
 
     return image
+
+
+# ==================== 新增算子实现函数 ====================
+
+def _shift_scale_rotate(image, shift_x, shift_y, scale, angle, border_mode="reflect"):
+    """综合几何变换：平移+缩放+旋转"""
+    try:
+        h, w = image.shape[:2]
+
+        # 构建变换矩阵
+        center = (w / 2, h / 2)
+        M = cv2.getRotationMatrix2D(center, angle, scale)
+        M[0, 2] += shift_x
+        M[1, 2] += shift_y
+
+        # 确定边界模式
+        border_modes = {
+            "reflect": cv2.BORDER_REFLECT_101,
+            "constant": cv2.BORDER_CONSTANT,
+            "wrap": cv2.BORDER_WRAP
+        }
+        border_flag = border_modes.get(border_mode, cv2.BORDER_REFLECT_101)
+        border_value = (0, 0, 0) if border_mode == "constant" else None
+
+        # 计算新图像大小
+        cos = np.abs(M[0, 0])
+        sin = np.abs(M[0, 1])
+        new_w = int((h * sin) + (w * cos))
+        new_h = int((h * cos) + (w * sin))
+
+        # 调整变换矩阵
+        M[0, 2] += (new_w - w) / 2
+        M[1, 2] += (new_h - h) / 2
+
+        # 应用变换
+        result = cv2.warpAffine(image, M, (new_w, new_h),
+                              flags=cv2.INTER_LINEAR,
+                              borderMode=border_flag,
+                              borderValue=border_value)
+        return result
+    except Exception as e:
+        logger.warning(f"综合几何变换失败: {str(e)}")
+        return image
+
+
+def _random_resized_crop(image, height, width, scale_range, ratio_range):
+    """随机裁剪缩放"""
+    try:
+        h, w = image.shape[:2]
+
+        # 随机采样参数
+        scale = np.random.uniform(*scale_range) if isinstance(scale_range, (list, tuple)) else scale_range
+        ratio = np.random.uniform(*ratio_range) if isinstance(ratio_range, (list, tuple)) else ratio_range
+
+        # 计算裁剪区域
+        area = h * w
+        target_area = scale * area
+
+        aspect_ratio = ratio
+        crop_h = int(round((target_area * aspect_ratio) ** 0.5))
+        crop_w = int(round((target_area / aspect_ratio) ** 0.5))
+
+        # 确保不越界
+        crop_h = min(crop_h, h)
+        crop_w = min(crop_w, w)
+
+        if crop_h < 1 or crop_w < 1:
+            # 回退到简单缩放
+            return cv2.resize(image, (width, height), interpolation=cv2.INTER_LINEAR)
+
+        # 随机位置
+        top = np.random.randint(0, h - crop_h + 1) if crop_h < h else 0
+        left = np.random.randint(0, w - crop_w + 1) if crop_w < w else 0
+
+        # 裁剪
+        cropped = image[top:top+crop_h, left:left+crop_w]
+
+        # 缩放到目标尺寸
+        result = cv2.resize(cropped, (width, height), interpolation=cv2.INTER_LINEAR)
+        return result
+    except Exception as e:
+        logger.warning(f"随机裁剪缩放失败: {str(e)}")
+        return cv2.resize(image, (width, height), interpolation=cv2.INTER_LINEAR)
+
+
+def _perspective_transform_random(image, intensity):
+    """随机透视变换"""
+    try:
+        h, w = image.shape[:2]
+
+        # 计算四个角点的偏移
+        max_offset = min(h, w) * intensity
+
+        # 原始角点
+        src_points = np.float32([
+            [0, 0],
+            [w, 0],
+            [w, h],
+            [0, h]
+        ])
+
+        # 随机偏移
+        dst_points = np.float32([
+            [np.random.uniform(-max_offset, max_offset), np.random.uniform(-max_offset, max_offset)],
+            [w + np.random.uniform(-max_offset, max_offset), np.random.uniform(-max_offset, max_offset)],
+            [w + np.random.uniform(-max_offset, max_offset), h + np.random.uniform(-max_offset, max_offset)],
+            [np.random.uniform(-max_offset, max_offset), h + np.random.uniform(-max_offset, max_offset)]
+        ])
+
+        # 确保点在图像内
+        dst_points = np.clip(dst_points, 0, [w, h])
+
+        # 计算透视变换矩阵
+        matrix = cv2.getPerspectiveTransform(src_points, dst_points)
+
+        # 应用变换
+        result = cv2.warpPerspective(image, matrix, (w, h))
+        return result
+    except Exception as e:
+        logger.warning(f"透视变换失败: {str(e)}")
+        return image
+
+
+def _shear_transform(image, angle_x, angle_y):
+    """剪切变换"""
+    try:
+        h, w = image.shape[:2]
+
+        # 转换角度为弧度
+        tan_x = np.tan(np.radians(angle_x))
+        tan_y = np.tan(np.radians(angle_y))
+
+        # 构建剪切矩阵
+        shear_matrix = np.float32([
+            [1, tan_x, 0],
+            [tan_y, 1, 0]
+        ])
+
+        # 计算新图像大小
+        new_w = int(w + h * abs(tan_x))
+        new_h = int(h + w * abs(tan_y))
+
+        # 调整矩阵以保持图像居中
+        shear_matrix[0, 2] = (new_w - w) / 2 if tan_x > 0 else 0
+        shear_matrix[1, 2] = (new_h - h) / 2 if tan_y > 0 else 0
+
+        # 应用变换
+        result = cv2.warpAffine(image, shear_matrix, (new_w, new_h),
+                              borderMode=cv2.BORDER_CONSTANT,
+                              borderValue=(0, 0, 0))
+        return result
+    except Exception as e:
+        logger.warning(f"剪切变换失败: {str(e)}")
+        return image
+
+
+def _hsv_color_adjust(image, h_shift, s_shift, v_shift):
+    """HSV颜色空间调整"""
+    try:
+        hsv = cv2.cvtColor(image, cv2.COLOR_RGB2HSV)
+        h, s, v = cv2.split(hsv)
+
+        # 调整色调（环绕处理）
+        h = h.astype(np.int16)
+        h = (h + int(h_shift / 2)) % 180  # OpenCV H范围0-179
+        h = h.astype(np.uint8)
+
+        # 调整饱和度
+        s = s.astype(np.float32)
+        s = np.clip(s * (1 + s_shift), 0, 255).astype(np.uint8)
+
+        # 调明明度
+        v = v.astype(np.float32)
+        v = np.clip(v * (1 + v_shift), 0, 255).astype(np.uint8)
+
+        # 合并并转换回RGB
+        hsv_shifted = cv2.merge([h, s, v])
+        return cv2.cvtColor(hsv_shifted, cv2.COLOR_HSV2RGB)
+    except Exception as e:
+        logger.warning(f"HSV颜色调整失败: {str(e)}")
+        return image
+
+
+def _rgb_shift_adjust(image, r_shift, g_shift, b_shift):
+    """RGB通道偏移"""
+    try:
+        result = image.copy()
+        result[:, :, 0] = np.clip(image[:, :, 0] + r_shift, 0, 255)
+        result[:, :, 1] = np.clip(image[:, :, 1] + g_shift, 0, 255)
+        result[:, :, 2] = np.clip(image[:, :, 2] + b_shift, 0, 255)
+        return result
+    except Exception as e:
+        logger.warning(f"RGB通道偏移失败: {str(e)}")
+        return image
+
+
+def _to_gray_convert(image):
+    """转灰度"""
+    try:
+        gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+        # 转回三通道
+        return cv2.cvtColor(gray, cv2.COLOR_GRAY2RGB)
+    except Exception as e:
+        logger.warning(f"转灰度失败: {str(e)}")
+        return image
+
+
+def _gaussian_blur_with_kernel(image, kernel_size, sigma):
+    """使用指定核大小的高斯模糊"""
+    try:
+        if kernel_size <= 1:
+            return image
+        # 确保是奇数
+        if kernel_size % 2 == 0:
+            kernel_size += 1
+        kernel_size = max(3, min(kernel_size, 51))
+        return cv2.GaussianBlur(image, (kernel_size, kernel_size), sigma)
+    except Exception as e:
+        logger.warning(f"高斯模糊失败: {str(e)}")
+        return image

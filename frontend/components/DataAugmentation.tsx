@@ -62,7 +62,7 @@ import type {
   DatasetItem
 } from '../types';
 
-type ParamType = 'range' | 'number' | 'boolean' | 'select' | 'tuple';
+type ParamType = 'range' | 'number' | 'boolean' | 'select' | 'tuple' | 'float_range' | 'int_range';
 
 interface AugParamDef {
   name: string;
@@ -99,8 +99,8 @@ interface NotificationProps {
   type: 'error' | 'success' | 'info';
 }
 
-// 自定义数字输入组件（带加减按钮）
-interface NumberInputProps {
+// 单值滑块组件（滑块 + 精调按钮）
+interface SliderWithStepperProps {
   value: number;
   onChange: (val: number) => void;
   min?: number;
@@ -109,42 +109,296 @@ interface NumberInputProps {
   className?: string;
 }
 
-function NumberInput({ value, onChange, min, max, step, className }: NumberInputProps) {
+function SliderWithStepper({ value, onChange, min = 0, max = 100, step = 1, className }: SliderWithStepperProps) {
+  const range = max - min;
+  const percent = ((value - min) / range) * 100;
+
+  // 修复浮点数精度问题
+  const clampValue = (val: number) => {
+    const precision = step < 0.01 ? 3 : step < 0.1 ? 2 : step < 1 ? 1 : 0;
+    return parseFloat(val.toFixed(precision));
+  };
+
+  const cleanValue = clampValue(value);
+
   const handleIncrement = () => {
-    const newValue = Math.min(max ?? Number.MAX_SAFE_INTEGER, value + (step ?? 1));
+    const newValue = clampValue(Math.min(max, cleanValue + step));
     onChange(newValue);
   };
 
   const handleDecrement = () => {
-    const newValue = Math.max(min ?? Number.MIN_SAFE_INTEGER, value - (step ?? 1));
+    const newValue = clampValue(Math.max(min, cleanValue - step));
     onChange(newValue);
   };
 
+  const handleSliderChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    onChange(clampValue(parseFloat(e.target.value)));
+  };
+
+  // 格式化显示值
+  const formatDisplayValue = (val: number) => {
+    const precision = step < 0.01 ? 3 : step < 1 ? 2 : 0;
+    return val.toFixed(precision);
+  };
+
   return (
-    <div className={`flex items-center ${className}`}>
-      <button
-        type="button"
-        onClick={handleDecrement}
-        className="px-2 py-1 bg-slate-800 border border-r-0 border-slate-700 rounded-l text-slate-400 hover:bg-slate-700 hover:text-white transition-colors"
+    <div className={`space-y-2 ${className}`}>
+      {/* 滑块 */}
+      <div className="relative h-5 flex items-center group">
+        {/* 轨道 */}
+        <div className="absolute left-0 right-0 h-1.5 bg-slate-700 rounded-full"></div>
+        {/* 已选区域 */}
+        <div
+          className="absolute left-0 h-1.5 bg-cyan-500 rounded-full transition-all"
+          style={{ width: `${percent}%` }}
+        ></div>
+        {/* 滑块输入 - 使用自定义样式 */}
+        <input
+          type="range"
+          min={min}
+          max={max}
+          step={step}
+          value={cleanValue}
+          onChange={handleSliderChange}
+          className="absolute w-full h-5 opacity-0 cursor-pointer z-10"
+          style={{ pointerEvents: 'auto' }}
+        />
+        {/* 滑块手柄 - pointer-events-none 让点击穿透到 input */}
+        <div
+          className="absolute w-4 h-4 bg-white rounded-full shadow-lg border-2 border-cyan-500 cursor-grab active:cursor-grabbing z-20 transition-transform hover:scale-125 pointer-events-none"
+          style={{ left: `calc(${percent}% - 8px)` }}
+        ></div>
+      </div>
+
+      {/* 精调按钮 + 显示 */}
+      <div className="flex items-center">
+        <button
+          type="button"
+          onClick={handleDecrement}
+          className="px-2 py-1 bg-slate-800 border border-r-0 border-slate-700 rounded-l text-slate-400 hover:bg-slate-700 hover:text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          disabled={cleanValue <= min}
+        >
+          −
+        </button>
+        <div className="flex-1 bg-slate-900 border-y border-slate-700 text-center text-xs text-white py-1 font-mono">
+          {formatDisplayValue(cleanValue)}
+        </div>
+        <button
+          type="button"
+          onClick={handleIncrement}
+          className="px-2 py-1 bg-slate-800 border border-l-0 border-slate-700 rounded-r text-slate-400 hover:bg-slate-700 hover:text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          disabled={cleanValue >= max}
+        >
+          +
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// 双滑块范围输入组件
+interface DoubleRangeSliderProps {
+  value: [number, number];
+  onChange: (val: [number, number]) => void;
+  min?: number;
+  max?: number;
+  step?: number;
+  className?: string;
+}
+
+function DoubleRangeSlider({ value, onChange, min = 0, max = 100, step = 1, className }: DoubleRangeSliderProps) {
+  // 修复浮点数精度问题
+  const clampValue = (val: number) => {
+    const precision = step < 0.01 ? 3 : step < 0.1 ? 2 : step < 1 ? 1 : 0;
+    return parseFloat(val.toFixed(precision));
+  };
+
+  const [rawMinVal, rawMaxVal] = value;
+  const minVal = clampValue(rawMinVal);
+  const maxVal = clampValue(rawMaxVal);
+  const range = max - min;
+
+  // 计算滑块位置的百分比
+  const leftPercent = ((minVal - min) / range) * 100;
+  const rightPercent = ((maxVal - min) / range) * 100;
+
+  // 拖动状态
+  const [draggingMin, setDraggingMin] = useState(false);
+  const [draggingMax, setDraggingMax] = useState(false);
+  const trackRef = useRef<HTMLDivElement>(null);
+
+  // 计算中点，用于判断点击的是哪个滑块
+  const midPercent = (leftPercent + rightPercent) / 2;
+
+  // 从像素位置转换为值
+  const percentToValue = (percent: number) => {
+    const val = min + (percent / 100) * range;
+    return clampValue(val);
+  };
+
+  // 处理轨道上的鼠标按下
+  const handleTrackMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!trackRef.current) return;
+
+    const rect = trackRef.current.getBoundingClientRect();
+    const clickX = e.clientX - rect.left;
+    const clickPercent = (clickX / rect.width) * 100;
+
+    // 判断点击的是哪个滑块区域
+    if (clickPercent < midPercent) {
+      // 点击左侧区域，移动左滑块
+      const newVal = percentToValue(clickPercent);
+      onChange([Math.min(newVal, maxVal - step), maxVal]);
+      setDraggingMin(true);
+    } else {
+      // 点击右侧区域，移动右滑块
+      const newVal = percentToValue(clickPercent);
+      onChange([minVal, Math.max(newVal, minVal + step)]);
+      setDraggingMax(true);
+    }
+  };
+
+  // 鼠标移动处理
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!trackRef.current) return;
+      if (!draggingMin && !draggingMax) return;
+
+      const rect = trackRef.current.getBoundingClientRect();
+      const moveX = e.clientX - rect.left;
+      const movePercent = Math.max(0, Math.min(100, (moveX / rect.width) * 100));
+      const newVal = percentToValue(movePercent);
+
+      if (draggingMin) {
+        onChange([Math.min(newVal, maxVal - step), maxVal]);
+      } else if (draggingMax) {
+        onChange([minVal, Math.max(newVal, minVal + step)]);
+      }
+    };
+
+    const handleMouseUp = () => {
+      setDraggingMin(false);
+      setDraggingMax(false);
+    };
+
+    if (draggingMin || draggingMax) {
+      document.addEventListener('mousemove', handleMouseMove);
+      document.addEventListener('mouseup', handleMouseUp);
+      return () => {
+        document.removeEventListener('mousemove', handleMouseMove);
+        document.removeEventListener('mouseup', handleMouseUp);
+      };
+    }
+  }, [draggingMin, draggingMax, minVal, maxVal, min, max, range, step, onChange]);
+
+  // 精调按钮处理
+  const handleMinDecrement = () => {
+    const newVal = clampValue(Math.max(min, minVal - step));
+    onChange([newVal, maxVal]);
+  };
+
+  const handleMinIncrement = () => {
+    const newVal = clampValue(Math.min(maxVal - step, minVal + step));
+    onChange([newVal, maxVal]);
+  };
+
+  const handleMaxDecrement = () => {
+    const newVal = clampValue(Math.max(minVal + step, maxVal - step));
+    onChange([minVal, newVal]);
+  };
+
+  const handleMaxIncrement = () => {
+    const newVal = clampValue(Math.min(max, maxVal + step));
+    onChange([minVal, newVal]);
+  };
+
+  // 格式化显示值
+  const formatValue = (val: number) => {
+    const precision = step < 0.01 ? 3 : step < 1 ? 2 : 0;
+    return val.toFixed(precision);
+  };
+
+  return (
+    <div className={`space-y-2 ${className}`}>
+      {/* 双滑块 */}
+      <div
+        ref={trackRef}
+        className="relative h-5 cursor-pointer select-none"
+        onMouseDown={handleTrackMouseDown}
       >
-        −
-      </button>
-      <input
-        type="number"
-        value={value}
-        onChange={(e) => onChange(parseFloat(e.target.value) || 0)}
-        className="w-20 bg-slate-900 border-y border-slate-700 text-center text-xs text-white outline-none focus:border-cyan-500"
-        min={min}
-        max={max}
-        step={step}
-      />
-      <button
-        type="button"
-        onClick={handleIncrement}
-        className="px-2 py-1 bg-slate-800 border border-l-0 border-slate-700 rounded-r text-slate-400 hover:bg-slate-700 hover:text-white transition-colors"
-      >
-        +
-      </button>
+        {/* 轨道 */}
+        <div className="absolute top-1/2 left-0 right-0 h-1.5 bg-slate-700 rounded -translate-y-1/2 pointer-events-none"></div>
+        {/* 已选区域 */}
+        <div
+          className="absolute top-1/2 h-1.5 bg-cyan-500 rounded -translate-y-1/2 transition-all pointer-events-none"
+          style={{ left: `${leftPercent}%`, width: `${rightPercent - leftPercent}%` }}
+        ></div>
+
+        {/* 左滑块手柄 */}
+        <div
+          className={`absolute top-1/2 -translate-y-1/2 w-4 h-4 bg-white rounded-full shadow-lg border-2 border-cyan-500 transition-transform hover:scale-125 ${
+            draggingMin ? 'scale-125 border-cyan-400' : ''
+          }`}
+          style={{ left: `calc(${leftPercent}% - 8px)`, zIndex: 20 }}
+        ></div>
+
+        {/* 右滑块手柄 */}
+        <div
+          className={`absolute top-1/2 -translate-y-1/2 w-4 h-4 bg-white rounded-full shadow-lg border-2 border-cyan-500 transition-transform hover:scale-125 ${
+            draggingMax ? 'scale-125 border-cyan-400' : ''
+          }`}
+          style={{ left: `calc(${rightPercent}% - 8px)`, zIndex: 21 }}
+        ></div>
+      </div>
+
+      {/* 精调按钮 + 显示 */}
+      <div className="flex items-center gap-2">
+        {/* 最小值 */}
+        <div className="flex-1 flex items-center">
+          <button
+            type="button"
+            onClick={handleMinDecrement}
+            className="px-2 py-1 bg-slate-800 border border-r-0 border-slate-700 rounded-l text-slate-400 hover:bg-slate-700 hover:text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            disabled={minVal <= min}
+          >
+            −
+          </button>
+          <div className="flex-1 bg-slate-900 border-y border-slate-700 text-center text-xs text-white py-1 font-mono">
+            {formatValue(minVal)}
+          </div>
+          <button
+            type="button"
+            onClick={handleMinIncrement}
+            className="px-2 py-1 bg-slate-800 border border-l-0 border-slate-700 rounded-r text-slate-400 hover:bg-slate-700 hover:text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            disabled={minVal >= maxVal - step}
+          >
+            +
+          </button>
+        </div>
+        <span className="text-slate-600">~</span>
+        {/* 最大值 */}
+        <div className="flex-1 flex items-center">
+          <button
+            type="button"
+            onClick={handleMaxDecrement}
+            className="px-2 py-1 bg-slate-800 border border-r-0 border-slate-700 rounded-l text-slate-400 hover:bg-slate-700 hover:text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            disabled={maxVal <= minVal + step}
+          >
+            −
+          </button>
+          <div className="flex-1 bg-slate-900 border-y border-slate-700 text-center text-xs text-white py-1 font-mono">
+            {formatValue(maxVal)}
+          </div>
+          <button
+            type="button"
+            onClick={handleMaxIncrement}
+            className="px-2 py-1 bg-slate-800 border border-l-0 border-slate-700 rounded-r text-slate-400 hover:bg-slate-700 hover:text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            disabled={maxVal >= max}
+          >
+            +
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -300,12 +554,35 @@ export default function DataAugmentation() {
         Object.values(response.data).forEach((category: any) => {
           category.operators.forEach((op: AugmentationOperator) => {
             // 转换参数类型：后端的 integer/float 映射到前端的 number
-            const convertedParams = op.params.map((p: any) => ({
-              ...p,
-              type: (p.param_type === 'integer' || p.param_type === 'float')
-                ? ('number' as const)
-                : (p.param_type as ParamType)
-            }));
+            const convertedParams = op.params.map((p: any) => {
+              let mappedType: ParamType;
+              // 注意：后端返回的键是 "type"，不是 "param_type"
+              switch (p.type) {
+                case 'integer':
+                case 'float':
+                  mappedType = 'number';
+                  break;
+                case 'float_range':
+                  mappedType = 'float_range';
+                  break;
+                case 'int_range':
+                  mappedType = 'int_range';
+                  break;
+                case 'boolean':
+                  mappedType = 'boolean';
+                  break;
+                case 'select':
+                  mappedType = 'select';
+                  break;
+                default:
+                  mappedType = p.type as ParamType;
+              }
+
+              return {
+                ...p,
+                type: mappedType
+              };
+            });
 
             ops.push({
               id: op.id,
@@ -1154,41 +1431,71 @@ export default function DataAugmentation() {
                           </p>
                         </div>
                       )}
-                      {selectedOperatorDef?.params.map(param => (
-                        <div key={param.name} className="space-y-2">
-                          <div className="flex justify-between text-xs">
-                            <span className="text-slate-400">{param.label_zh}</span>
-                            <span className="text-cyan-400 font-mono">{selectedItem.params[param.name]}</span>
+                      {selectedOperatorDef?.params.map(param => {
+                        const paramValue = selectedItem.params[param.name];
+                        // 处理范围参数的值（可能是数组或单值）
+                        const isArrayValue = Array.isArray(paramValue);
+                        const displayValue = isArrayValue ? `[${paramValue.join(', ')}]` : paramValue;
+
+                        return (
+                          <div key={param.name} className="space-y-2">
+                            <div className="flex justify-between text-xs">
+                              <span className="text-slate-400">{param.label_zh}</span>
+                              <span className="text-cyan-400 font-mono">{displayValue}</span>
+                            </div>
+                            {/* float_range 或 int_range：双滑块范围输入 */}
+                            {(param.type === 'float_range' || param.type === 'int_range') ? (
+                              <DoubleRangeSlider
+                                value={
+                                  isArrayValue
+                                    ? paramValue
+                                    : ([param.min_value ?? 0, param.max_value ?? 100] as [number, number])
+                                }
+                                onChange={(val) => updateParam(selectedItem.instanceId, param.name, val)}
+                                min={param.min_value ?? 0}
+                                max={param.max_value ?? 100}
+                                step={param.step ?? (param.type === 'int_range' ? 1 : 0.1)}
+                              />
+                            ) : param.type === 'number' ? (
+                              <SliderWithStepper
+                                value={paramValue}
+                                onChange={(val) => updateParam(selectedItem.instanceId, param.name, val)}
+                                min={param.min_value ?? 0}
+                                max={param.max_value ?? 100}
+                                step={param.step ?? 1}
+                              />
+                            ) : param.type === 'boolean' ? (
+                              <div className="flex items-center">
+                                <input
+                                  type="checkbox"
+                                  checked={paramValue}
+                                  onChange={(e) => updateParam(selectedItem.instanceId, param.name, e.target.checked)}
+                                  className="w-4 h-4 rounded border-slate-700 bg-slate-900 accent-cyan-500 focus:ring-0 focus:ring-offset-0"
+                                />
+                              </div>
+                            ) : param.type === 'select' ? (
+                              <select
+                                value={paramValue}
+                                onChange={(e) => updateParam(selectedItem.instanceId, param.name, e.target.value)}
+                                className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-1.5 text-xs text-white outline-none focus:border-cyan-500 transition-colors"
+                              >
+                                {param.options?.map((opt: any) => (
+                                  <option key={opt.value} value={opt.value}>
+                                    {opt.label}
+                                  </option>
+                                ))}
+                              </select>
+                            ) : (
+                              <input
+                                type="number"
+                                value={paramValue}
+                                onChange={(e) => updateParam(selectedItem.instanceId, param.name, parseFloat(e.target.value) || 0)}
+                                className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-1.5 text-xs text-white outline-none focus:border-cyan-500 transition-colors"
+                              />
+                            )}
                           </div>
-                          {param.type === 'range' ? (
-                            <input
-                              type="range"
-                              min={param.min_value ?? 0}
-                              max={param.max_value ?? 100}
-                              step={param.step ?? 1}
-                              value={selectedItem.params[param.name]}
-                              onChange={(e) => updateParam(selectedItem.instanceId, param.name, parseFloat(e.target.value))}
-                              className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-cyan-500"
-                            />
-                          ) : param.type === 'number' ? (
-                            <NumberInput
-                              value={selectedItem.params[param.name]}
-                              onChange={(val) => updateParam(selectedItem.instanceId, param.name, val)}
-                              min={param.min_value}
-                              max={param.max_value}
-                              step={param.step}
-                              className="flex-1"
-                            />
-                          ) : (
-                            <input
-                              type="number"
-                              value={selectedItem.params[param.name]}
-                              onChange={(e) => updateParam(selectedItem.instanceId, param.name, parseFloat(e.target.value) || 0)}
-                              className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-1.5 text-xs text-white outline-none focus:border-cyan-500 transition-colors"
-                            />
-                          )}
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   ) : (
                     <div className="h-full flex flex-col items-center justify-center text-slate-600">
