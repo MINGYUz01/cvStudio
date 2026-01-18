@@ -8,11 +8,24 @@ from sqlalchemy.orm import Session
 from loguru import logger
 from pathlib import Path
 from datetime import datetime
+import sys
 
 from app.models.training import TrainingRun
 from app.utils.config_parser import TrainingConfigParser
 from app.utils.checkpoint_manager import CheckpointManager
 from app.utils.training_logger import training_logger, TrainingStatus
+
+
+def debug_log(msg: str, level: str = "INFO"):
+    """输出调试日志到控制台和文件"""
+    log_msg = f"[TRAINING_SERVICE] {msg}"
+    print(f"[DEBUG] {log_msg}", flush=True)  # 强制输出到控制台
+    if level == "INFO":
+        logger.info(log_msg)
+    elif level == "ERROR":
+        logger.error(log_msg)
+    elif level == "WARNING":
+        logger.warning(log_msg)
 
 
 class TrainingService:
@@ -22,6 +35,7 @@ class TrainingService:
         """初始化训练服务"""
         self.config_parser = TrainingConfigParser()
         self.logger = logger.bind(component="training_service")
+        debug_log("训练服务已初始化")
 
     def create_training_run(
         self,
@@ -111,7 +125,12 @@ class TrainingService:
         Raises:
             ValueError: 当训练任务不存在或启动失败时
         """
+        debug_log(f"=== 开始启动训练任务: training_run_id={training_run_id} ===")
+        debug_log(f"模型架构: {model_arch.get('class_name', 'Unknown')}")
+        debug_log(f"数据集: {dataset_info.get('name', 'Unknown')}")
+
         try:
+            from app.database import SessionLocal
             db = SessionLocal()
             try:
                 training_run = db.query(TrainingRun).filter(
@@ -119,26 +138,38 @@ class TrainingService:
                 ).first()
 
                 if not training_run:
+                    debug_log(f"训练任务不存在: {training_run_id}", "ERROR")
                     raise ValueError(f"训练任务不存在: {training_run_id}")
 
+                debug_log(f"找到训练任务: {training_run.name}, 当前状态: {training_run.status}")
+                debug_log(f"超参数配置: {training_run.hyperparams}")
+
                 # 解析配置
+                debug_log("开始解析前端配置...")
                 config = self.config_parser.parse_frontend_config(
                     training_run.hyperparams,
                     model_arch,
                     dataset_info
                 )
+                debug_log(f"配置解析完成: {list(config.keys())}")
 
                 experiment_id = f"exp_{training_run.id}"
+                debug_log(f"实验ID: {experiment_id}")
 
                 # 提交Celery任务
-                from app.tasks.training_tasks import start_training
+                debug_log("准备提交Celery任务...")
+                from app.tasks.training_tasks import start_training as celery_start_training
 
-                task = start_training.delay(experiment_id, config)
+                debug_log("调用 celery_start_training.delay()...")
+                task = celery_start_training.delay(experiment_id, config)
+                debug_log(f"Celery任务已提交: task_id={task.id}", "INFO")
 
                 # 更新数据库状态
                 training_run.status = "queued"
                 training_run.start_time = datetime.utcnow()
+                training_run.celery_task_id = task.id
                 db.commit()
+                debug_log(f"数据库状态已更新: status=queued, celery_task_id={task.id}")
 
                 # 更新日志状态
                 training_logger.update_status(
@@ -158,16 +189,21 @@ class TrainingService:
                     f"训练任务已启动: {training_run_id}, Celery任务: {task.id}"
                 )
 
+                debug_log(f"=== 训练任务启动完成: task_id={task.id} ===", "INFO")
                 return task.id
 
             except Exception as e:
                 db.rollback()
+                debug_log(f"启动训练失败 (内部异常): {e}", "ERROR")
+                import traceback
+                debug_log(f"错误堆栈:\n{traceback.format_exc()}", "ERROR")
                 raise
             finally:
                 db.close()
 
         except Exception as e:
             self.logger.error(f"启动训练任务失败: {e}")
+            debug_log(f"启动训练任务失败 (外部异常): {e}", "ERROR")
             raise ValueError(f"启动训练任务失败: {e}")
 
     def control_training(

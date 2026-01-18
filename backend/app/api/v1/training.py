@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import Optional, List
 from loguru import logger
+import sys
 
 from app.database import get_db
 from app.services.training_service import TrainingService
@@ -27,6 +28,23 @@ from app.schemas.training import (
 
 router = APIRouter()
 training_service = TrainingService()
+
+# ============================================================================
+# 调试日志辅助函数
+# ============================================================================
+
+def debug_log(msg: str, level: str = "INFO"):
+    """输出调试日志到控制台和文件"""
+    log_msg = f"[TRAINING_API] {msg}"
+    print(f"[DEBUG] {log_msg}", flush=True)  # 强制输出到控制台
+    if level == "INFO":
+        logger.info(log_msg)
+    elif level == "ERROR":
+        logger.error(log_msg)
+    elif level == "WARNING":
+        logger.warning(log_msg)
+
+debug_log("训练API模块已加载")
 
 
 @router.get("/", response_model=List[ExperimentListItem])
@@ -100,6 +118,9 @@ async def create_training_run(
     Returns:
         创建的训练任务
     """
+    debug_log(f"收到创建训练任务请求: name={training_data.name}, model_id={training_data.model_id}, dataset_id={training_data.dataset_id}")
+    debug_log(f"训练配置: {training_data.config}", "INFO")
+
     try:
         training_run = training_service.create_training_run(
             db=db,
@@ -111,14 +132,17 @@ async def create_training_run(
             user_id=training_data.user_id
         )
 
+        debug_log(f"训练任务创建成功: id={training_run.id}, status={training_run.status}")
         return training_run
 
     except ValueError as e:
+        debug_log(f"创建训练任务失败 (ValueError): {e}", "ERROR")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e)
         )
     except Exception as e:
+        debug_log(f"创建训练任务失败 (Exception): {e}", "ERROR")
         logger.error(f"创建训练任务失败: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -141,15 +165,130 @@ async def get_training_run(
     Returns:
         训练任务详情
     """
+    debug_log(f"获取训练任务详情: id={training_id}")
     training_run = training_service.get_training_run(db, training_id)
 
     if not training_run:
+        debug_log(f"训练任务不存在: {training_id}", "ERROR")
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"训练任务不存在: {training_id}"
         )
 
     return training_run
+
+
+@router.post("/{training_id}/start")
+async def start_training_run(
+    training_id: int,
+    db: Session = Depends(get_db)
+):
+    """
+    启动训练任务
+
+    Args:
+        training_id: 训练任务ID
+        db: 数据库会话
+
+    Returns:
+        启动结果
+    """
+    debug_log(f"收到启动训练请求: training_id={training_id}")
+
+    try:
+        # 获取训练任务
+        training_run = training_service.get_training_run(db, training_id)
+        if not training_run:
+            debug_log(f"训练任务不存在: {training_id}", "ERROR")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"训练任务不存在: {training_id}"
+            )
+
+        debug_log(f"训练任务当前状态: {training_run.status}")
+
+        # 检查状态
+        if training_run.status in ["running", "queued"]:
+            debug_log(f"训练任务已在运行或队列中: {training_run.status}", "WARNING")
+            return {
+                "success": True,
+                "message": f"训练任务已在{training_run.status}状态",
+                "task_id": training_run.celery_task_id
+            }
+
+        # 获取模型架构信息
+        from app.services.model_service import ModelService
+        model_service = ModelService()
+
+        debug_log(f"获取模型架构信息: model_id={training_run.model_id}")
+        model_code = model_service.get_model_code(db, training_run.model_id)
+        if not model_code:
+            debug_log(f"模型代码不存在: {training_run.model_id}", "ERROR")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"模型代码不存在: {training_run.model_id}"
+            )
+
+        model_arch = {
+            "architecture": model_code.code_content,
+            "class_name": model_code.code_content.get("class_name", "Model"),
+            "input_size": model_code.code_content.get("input_size", 224)
+        }
+
+        # 获取数据集信息
+        from app.services.dataset_service import DatasetService
+        dataset_service = DatasetService()
+
+        debug_log(f"获取数据集信息: dataset_id={training_run.dataset_id}")
+        dataset = dataset_service.get_dataset(db, training_run.dataset_id)
+        if not dataset:
+            debug_log(f"数据集不存在: {training_id}", "ERROR")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"数据集不存在: {training_id}"
+            )
+
+        dataset_info = {
+            "id": dataset.id,
+            "name": dataset.name,
+            "format": dataset.format,
+            "root_path": dataset.root_path,
+            "num_classes": dataset.num_classes,
+            "num_images": dataset.num_images
+        }
+
+        debug_log(f"模型架构: {model_arch.get('class_name')}, 数据集: {dataset_info['name']}")
+
+        # 调用启动训练方法
+        debug_log("调用 training_service.start_training...")
+        task_id = training_service.start_training(
+            training_run_id=training_id,
+            model_arch=model_arch,
+            dataset_info=dataset_info
+        )
+
+        debug_log(f"训练任务已提交到Celery: task_id={task_id}", "INFO")
+
+        # 更新数据库中的Celery任务ID
+        training_run.celery_task_id = task_id
+        db.commit()
+
+        return {
+            "success": True,
+            "message": "训练任务已启动",
+            "task_id": task_id
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        debug_log(f"启动训练任务失败: {e}", "ERROR")
+        import traceback
+        debug_log(f"错误堆栈: {traceback.format_exc()}", "ERROR")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"启动训练失败: {str(e)}"
+        )
 
 
 @router.put("/{training_id}", response_model=TrainingRunResponse)

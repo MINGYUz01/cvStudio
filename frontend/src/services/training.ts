@@ -160,7 +160,22 @@ class TrainingServiceClass {
    * @returns 创建的训练任务
    */
   async createTrainingRun(data: TrainingRunCreateData): Promise<TrainingRun> {
-    return apiClient.post<TrainingRun>(`${this.baseUrl}/`, data);
+    console.log('[DEBUG] 创建训练任务 - 请求数据:', JSON.stringify(data, null, 2));
+    const response = await apiClient.post<TrainingRun>(`${this.baseUrl}/`, data);
+    console.log('[DEBUG] 创建训练任务 - 响应数据:', JSON.stringify(response, null, 2));
+    return response;
+  }
+
+  /**
+   * 启动训练任务
+   * @param id 训练任务ID
+   * @returns 启动响应
+   */
+  async startTraining(id: number): Promise<{ success: boolean; message: string; task_id?: string }> {
+    console.log(`[DEBUG] 启动训练任务 - ID: ${id}`);
+    const response = await apiClient.post<{ success: boolean; message: string; task_id?: string }>(`${this.baseUrl}/${id}/start`);
+    console.log(`[DEBUG] 启动训练任务 - 响应:`, JSON.stringify(response, null, 2));
+    return response;
   }
 
   /**

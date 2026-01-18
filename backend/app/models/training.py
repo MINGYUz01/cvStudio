@@ -24,6 +24,7 @@ class TrainingRun(Base):
     total_epochs = Column(Integer, default=0)
     best_metric = Column(Float, nullable=True)  # 最佳指标值
     device = Column(String(20), default="cpu")  # 训练设备
+    celery_task_id = Column(String(255), nullable=True)  # Celery任务ID
     log_file = Column(String(500), nullable=True)  # 日志文件路径
     error_message = Column(Text, nullable=True)
     start_time = Column(DateTime(timezone=True), nullable=True)

@@ -170,7 +170,12 @@ class ApiClient {
       throw err;
     }
 
-    return response.json();
+    // 处理 204 No Content 响应（删除操作通常返回此状态码）
+    if (response.status === 204) {
+      return undefined as T;
+    }
+
+    return response.json() as T;
   }
 
   /**

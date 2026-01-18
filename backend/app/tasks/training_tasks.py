@@ -17,6 +17,18 @@ from app.utils.trainer import Trainer
 from app.utils.training_logger import training_logger, TrainingStatus
 
 
+def debug_log(msg: str, level: str = "INFO"):
+    """输出调试日志到控制台和文件"""
+    log_msg = f"[CELERY_TASK] {msg}"
+    print(f"[DEBUG] {log_msg}", flush=True)  # 强制输出到控制台
+    if level == "INFO":
+        logger.info(log_msg)
+    elif level == "ERROR":
+        logger.error(log_msg)
+    elif level == "WARNING":
+        logger.warning(log_msg)
+
+
 @celery_app.task(
     name='app.tasks.training_tasks.start_training',
     bind=True,
@@ -38,14 +50,22 @@ def start_training(self, experiment_id: str, config: Dict[str, Any]) -> Dict[str
     Raises:
         Exception: 当训练失败时
     """
+    debug_log(f"=== 收到训练任务: experiment_id={experiment_id} ===")
+    debug_log(f"Celery Task ID: {self.request.id}")
+    debug_log(f"配置键: {list(config.keys())}")
+
     try:
         logger.info(f"开始训练任务: {experiment_id}")
+        debug_log("更新训练状态为 RUNNING...")
 
         # 更新状态为running
         training_logger.update_status(experiment_id, TrainingStatus.RUNNING)
 
         # 添加任务ID到配置
         config["celery_task_id"] = self.request.id
+        debug_log(f"Celery任务ID已添加到配置: {self.request.id}")
+
+        debug_log("创建 Trainer 实例...")
 
         # 创建训练器实例
         trainer = Trainer(
@@ -54,15 +74,21 @@ def start_training(self, experiment_id: str, config: Dict[str, Any]) -> Dict[str
             celery_task=self
         )
 
+        debug_log("Trainer 实例创建成功，开始训练...")
+
         # 开始训练
         result = trainer.train()
 
         logger.info(f"训练任务完成: {experiment_id}")
+        debug_log(f"=== 训练任务完成: {experiment_id} ===", "INFO")
 
         return result
 
     except Exception as e:
         logger.error(f"训练任务执行失败 {experiment_id}: {e}")
+        debug_log(f"训练任务执行失败: {e}", "ERROR")
+        import traceback
+        debug_log(f"错误堆栈:\n{traceback.format_exc()}", "ERROR")
 
         # 更新状态为失败
         training_logger.update_status(experiment_id, TrainingStatus.FAILED)

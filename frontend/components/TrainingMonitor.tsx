@@ -623,7 +623,9 @@ const TrainingMonitor: React.FC = () => {
         trainingConfig.augmentation_strategy_id = formAugmentationId;
       }
 
-      await trainingService.createTrainingRun({
+      // 创建训练任务
+      console.log('[DEBUG] 开始创建训练任务...');
+      const createdRun = await trainingService.createTrainingRun({
         name: formName,
         description: `训练任务: ${formName}`,
         model_id: formModelFileId,
@@ -632,7 +634,19 @@ const TrainingMonitor: React.FC = () => {
         user_id: 1 // TODO: 从认证中获取用户ID
       });
 
-      showNotification("训练任务创建成功", "success");
+      console.log('[DEBUG] 训练任务创建成功，ID:', createdRun.id);
+      showNotification("训练任务创建成功，正在启动...", "success");
+
+      // 启动训练任务
+      console.log('[DEBUG] 准备启动训练任务...');
+      try {
+        const startResult = await trainingService.startTraining(createdRun.id);
+        console.log('[DEBUG] 训练启动结果:', startResult);
+        showNotification(startResult.message || "训练已启动", "success");
+      } catch (startErr) {
+        console.error('[DEBUG] 启动训练失败:', startErr);
+        showNotification("任务已创建，但启动训练失败，请手动启动", "error");
+      }
 
       // 刷新列表
       await fetchExperiments();
