@@ -144,7 +144,6 @@ class ApiClient {
         console.error('解析JSON失败:', e);
         return { message: '请求失败' };
       });
-      console.log('后端返回的错误响应:', error);
 
       // 统一错误格式：无论是 detail 格式还是新格式，都转换为统一的 detail 对象
       let errorDetail: any;
@@ -168,7 +167,6 @@ class ApiClient {
       );
       err.detail = errorDetail;
       err.status = response.status;
-      console.log('构造的错误对象:', err);
       throw err;
     }
 

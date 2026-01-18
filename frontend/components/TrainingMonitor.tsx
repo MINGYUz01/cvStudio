@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Play,
   Pause,
@@ -32,7 +32,8 @@ import {
   Edit3,
   Trash2,
   HardDrive,
-  AlertCircle
+  AlertCircle,
+  Loader2
 } from 'lucide-react';
 import {
   LineChart,
@@ -47,93 +48,62 @@ import {
   Area
 } from 'recharts';
 import { useTrainingLogsWS, LogEntry, MetricsEntry } from '../hooks/useWebSocket';
+import {
+  trainingService,
+  TrainingRun,
+  TrainingStatus,
+  MetricsEntry as TrainingMetricsEntry,
+  LogEntry as TrainingLogEntry
+} from '../src/services/training';
+import { datasetService, Dataset } from '../src/services/datasets';
+import { getAugmentationStrategies, AugmentationStrategy } from '../src/services/augmentation';
+import { weightService, WeightLibraryItem } from '../src/services/weights';
+import { getPresetModels, PresetModel } from '../src/services/models';
 
-// --- Types & Mock Data ---
-
-// 初始实验数据（模拟数据）
-const INITIAL_EXPERIMENTS: Experiment[] = [
-  {
-    id: '1',
-    name: 'YOLOv8-Traffic-FineTune',
-    task: 'detection',
-    model: 'YOLOv8',
-    dataset: 'Urban_Traffic_V2',
-    augmentation: 'YOLO Default Train',
-    status: 'completed',
-    duration: '2h 15m',
-    accuracy: '78.5',
-    startedAt: '2 hours ago',
-    config: {
-      batch_size: 16,
-      epochs: 100,
-      learning_rate: 0.0003,
-      optimizer: 'AdamW',
-      input_size: 640,
-    }
-  },
-  {
-    id: '2',
-    name: 'ResNet50-MRI-Classification',
-    task: 'classification',
-    model: 'ResNet50',
-    dataset: 'Medical_MRI',
-    augmentation: 'Medical MRI Cleaner',
-    status: 'running',
-    duration: '45m',
-    accuracy: '92.3',
-    startedAt: '45 minutes ago',
-    config: {
-      batch_size: 32,
-      epochs: 50,
-      learning_rate: 0.001,
-      optimizer: 'Adam',
-      input_size: 224,
-    }
-  },
-  {
-    id: '4',
-    name: 'YOLOv5-COCO-Pretrain',
-    task: 'detection',
-    model: 'YOLOv5',
-    dataset: 'COCO_2017',
-    augmentation: 'No Augmentation',
-    status: 'queued',
-    duration: '0s',
-    accuracy: '0.00',
-    startedAt: 'Just now',
-    config: {
-      batch_size: 64,
-      epochs: 300,
-      learning_rate: 0.01,
-      optimizer: 'SGD',
-      input_size: 640,
-    }
-  },
-];
-
-// 训练图表数据（模拟数据）
-const TRAINING_CHART_DATA = Array.from({ length: 50 }, (_, i) => ({
-  epoch: i + 1,
-  trainLoss: Math.max(0.1, 2.5 * Math.exp(-i * 0.05) + Math.random() * 0.3),
-  valLoss: Math.max(0.15, 2.8 * Math.exp(-i * 0.045) + Math.random() * 0.4),
-  metric: Math.min(0.95, 0.3 + i * 0.012 + Math.random() * 0.05),
-}));
+// --- Types ---
 
 type TaskType = 'detection' | 'classification';
-type ExpStatus = 'running' | 'completed' | 'failed' | 'queued' | 'paused';
+type ExpStatus = 'pending' | 'queued' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled';
 
 interface Experiment {
-  id: string;
+  id: number;
   name: string;
+  description?: string;
   task: TaskType;
-  model: string;
-  dataset: string;
-  augmentation: string;
+  modelId: number;
+  modelName?: string;
+  datasetId: number;
+  datasetName?: string;
+  augmentationId?: number;
+  augmentationName?: string;
   status: ExpStatus;
+  progress: number;
+  currentEpoch: number;
+  totalEpochs: number;
+  bestMetric?: number;
   duration: string;
   accuracy: string; // mAP or Top-1
   startedAt: string;
   config?: any;
+  device?: string;
+  startTime?: string;
+  endTime?: string;
+}
+
+// 模型文件接口
+interface ModelFile {
+  id: number;
+  name: string;
+  file_name: string;
+  code_size: number;
+  created: string;
+}
+
+// 数据增强策略接口
+interface AugmentationOption {
+  id: number;
+  name: string;
+  description?: string;
 }
 
 // --- Configuration Schema ---
@@ -200,19 +170,23 @@ const TRAINING_SCHEMA = {
 
 const StatusBadge: React.FC<{ status: ExpStatus }> = ({ status }) => {
   const styles = {
+    pending: 'bg-slate-800 text-slate-400 border-slate-700',
+    queued: 'bg-slate-800 text-slate-400 border-slate-700',
     running: 'bg-emerald-950/40 text-emerald-400 border-emerald-500/30 animate-pulse',
+    paused: 'bg-amber-950/40 text-amber-400 border-amber-500/30',
     completed: 'bg-cyan-950/40 text-cyan-400 border-cyan-500/30',
     failed: 'bg-rose-950/40 text-rose-400 border-rose-500/30',
-    queued: 'bg-slate-800 text-slate-400 border-slate-700',
-    paused: 'bg-amber-950/40 text-amber-400 border-amber-500/30',
+    cancelled: 'bg-slate-800 text-slate-400 border-slate-700',
   };
-  
+
   const icons = {
+    pending: <Clock size={12} className="mr-1.5" />,
+    queued: <Clock size={12} className="mr-1.5" />,
     running: <RefreshCw size={12} className="mr-1.5 animate-spin" />,
+    paused: <Pause size={12} className="mr-1.5" />,
     completed: <CheckCircle size={12} className="mr-1.5" />,
     failed: <XCircle size={12} className="mr-1.5" />,
-    queued: <Clock size={12} className="mr-1.5" />,
-    paused: <Pause size={12} className="mr-1.5" />,
+    cancelled: <XCircle size={12} className="mr-1.5" />,
   };
 
   return (
@@ -340,33 +314,42 @@ const RenameModal: React.FC<{ isOpen: boolean; onClose: () => void; onConfirm: (
 
 const TrainingMonitor: React.FC = () => {
   const [view, setView] = useState<'list' | 'create' | 'detail'>('list');
-  const [experiments, setExperiments] = useState<Experiment[]>(INITIAL_EXPERIMENTS);
-  const [selectedExpId, setSelectedExpId] = useState<string | null>(null);
-  
+  const [experiments, setExperiments] = useState<Experiment[]>([]);
+  const [selectedExpId, setSelectedExpId] = useState<number | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  // API数据状态
+  const [datasets, setDatasets] = useState<Dataset[]>([]);
+  const [modelFiles, setModelFiles] = useState<ModelFile[]>([]);
+  const [augmentationStrategies, setAugmentationStrategies] = useState<AugmentationOption[]>([]);
+  const [weights, setWeights] = useState<WeightLibraryItem[]>([]);
+
   // --- Create Experiment Form State ---
   const [formTask, setFormTask] = useState<TaskType>('detection');
   const [formName, setFormName] = useState('');
-  const [formDataset, setFormDataset] = useState('');
-  const [formAugmentation, setFormAugmentation] = useState(''); 
-  const [formModel, setFormModel] = useState('');
-  const [allowOverwrite, setAllowOverwrite] = useState(false); // New: Overwrite State
-  const [showOverwriteWarning, setShowOverwriteWarning] = useState(false); // Timer state for tooltip
-  
+  const [formDatasetId, setFormDatasetId] = useState<number | null>(null);
+  const [formAugmentationId, setFormAugmentationId] = useState<number | null>(null);
+  const [formModelFileId, setFormModelFileId] = useState<number | null>(null);
+  const [formWeightId, setFormWeightId] = useState<number | null>(null);
+  const [allowOverwrite, setAllowOverwrite] = useState(false);
+  const [showOverwriteWarning, setShowOverwriteWarning] = useState(false);
+
   // Dynamic Config State
   const [config, setConfig] = useState<Record<string, any>>({});
-  
+
   // Modals & Action State
   const [showLogModal, setShowLogModal] = useState(false);
   const [showConfigModal, setShowConfigModal] = useState(false);
-  
+  const [deleteModal, setDeleteModal] = useState<{isOpen: boolean, id: number | null, name: string}>({ isOpen: false, id: null, name: '' });
+
   // Action Dropdown State
-  const [activeDropdownId, setActiveDropdownId] = useState<string | null>(null);
+  const [activeDropdownId, setActiveDropdownId] = useState<number | null>(null);
 
   // Stop Confirmation State
-  const [stopModal, setStopModal] = useState<{isOpen: boolean, id: string | null}>({ isOpen: false, id: null });
-  
+  const [stopModal, setStopModal] = useState<{isOpen: boolean, id: number | null}>({ isOpen: false, id: null });
+
   // Rename Modal State
-  const [renameModal, setRenameModal] = useState<{isOpen: boolean, id: string | null, currentName: string}>({ isOpen: false, id: null, currentName: '' });
+  const [renameModal, setRenameModal] = useState<{isOpen: boolean, id: number | null, currentName: string}>({ isOpen: false, id: null, currentName: '' });
 
   const [dummyLogs, setDummyLogs] = useState<string[]>([]);
   const [notification, setNotification] = useState<{msg: string, type: 'error' | 'success' | 'info'} | null>(null);
@@ -377,6 +360,104 @@ const TrainingMonitor: React.FC = () => {
   const [wsConnected, setWsConnected] = useState(false);
 
   const dropdownRef = useRef<HTMLDivElement>(null);
+
+  // API数据获取函数
+  const fetchExperiments = useCallback(async () => {
+    setLoading(true);
+    try {
+      const data = await trainingService.getTrainingRuns({ limit: 50 });
+      // 转换为前端Experiment格式
+      const converted: Experiment[] = data.map((item: TrainingRun) => ({
+        id: item.id,
+        name: item.name,
+        description: item.description,
+        task: (item.hyperparams?.task_type || 'classification') as TaskType,
+        modelId: item.model_id,
+        datasetId: item.dataset_id,
+        status: item.status as ExpStatus,
+        progress: item.progress,
+        currentEpoch: item.current_epoch,
+        totalEpochs: item.total_epochs,
+        bestMetric: item.best_metric,
+        duration: '0s',
+        accuracy: item.best_metric ? `${(item.best_metric * 100).toFixed(1)}%` : '0.00%',
+        startedAt: item.start_time ? new Date(item.start_time).toLocaleString() : new Date(item.created_at).toLocaleString(),
+        config: item.hyperparams,
+        device: item.device,
+        startTime: item.start_time,
+        endTime: item.end_time,
+      }));
+      setExperiments(converted);
+    } catch (err) {
+      console.error('获取训练任务失败:', err);
+      showNotification('获取训练任务失败', 'error');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const fetchDatasets = useCallback(async () => {
+    try {
+      const data = await datasetService.getDatasets({ limit: 100 });
+      setDatasets(data);
+    } catch (err) {
+      console.error('获取数据集失败:', err);
+    }
+  }, []);
+
+  const fetchModelFiles = useCallback(async () => {
+    try {
+      // 获取已生成的模型文件列表
+      const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1';
+      const token = localStorage.getItem('access_token');
+      const response = await fetch(`${baseUrl}/models/generated-files`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setModelFiles(data.codes || data.data || []);
+      }
+    } catch (err) {
+      console.error('获取模型文件失败:', err);
+    }
+  }, []);
+
+  const fetchAugmentationStrategies = useCallback(async () => {
+    try {
+      const data = await getAugmentationStrategies({ limit: 100 });
+      if (data.success && data.data) {
+        const converted: AugmentationOption[] = data.data.strategies.map((s: AugmentationStrategy) => ({
+          id: s.id,
+          name: s.name,
+          description: s.description
+        }));
+        setAugmentationStrategies(converted);
+      }
+    } catch (err) {
+      console.error('获取增强策略失败:', err);
+    }
+  }, []);
+
+  const fetchWeights = useCallback(async () => {
+    try {
+      const data = await weightService.getWeights();
+      setWeights(data.weights || []);
+    } catch (err) {
+      console.error('获取权重失败:', err);
+    }
+  }, []);
+
+  // 初始化加载数据
+  useEffect(() => {
+    fetchExperiments();
+    fetchDatasets();
+    fetchModelFiles();
+    fetchAugmentationStrategies();
+    fetchWeights();
+  }, [fetchExperiments, fetchDatasets, fetchModelFiles, fetchAugmentationStrategies, fetchWeights]);
 
   // Initialize Config Defaults
   useEffect(() => {
@@ -428,7 +509,7 @@ const TrainingMonitor: React.FC = () => {
   // WebSocket连接：只对正在运行的实验建立连接
   const shouldConnectWS = view === 'detail' && selectedExpId !== null && isExpRunning;
   const { connected, disconnect } = useTrainingLogsWS(
-    shouldConnectWS ? selectedExpId! : '',
+    shouldConnectWS ? `training_${selectedExpId}` : '',
     {
       onLog: (data: LogEntry) => {
         // 接收实时日志
@@ -456,7 +537,8 @@ const TrainingMonitor: React.FC = () => {
             // 更新准确率等显示数据
             return {
               ...exp,
-              accuracy: data.val_acc ? `${(data.val_acc * 100).toFixed(1)}%` : exp.accuracy
+              accuracy: data.val_acc ? `${(data.val_acc * 100).toFixed(1)}%` : exp.accuracy,
+              currentEpoch: data.epoch || exp.currentEpoch
             };
           }
           return exp;
@@ -492,53 +574,98 @@ const TrainingMonitor: React.FC = () => {
     }
   }, [view, selectedExpId]);
 
-  const handleStartTraining = () => {
-      if (!formName.trim()) {
-          showNotification("请输入实验名称", "error");
-          return;
-      }
+  // 创建训练任务
+  const handleStartTraining = async () => {
+    if (!formName.trim()) {
+      showNotification("请输入实验名称", "error");
+      return;
+    }
 
-      // Check for duplicate name
-      const exists = experiments.some(e => e.name === formName);
+    if (!formModelFileId) {
+      showNotification("请选择模型文件", "error");
+      return;
+    }
 
-      let updatedExperiments = [...experiments];
+    if (!formDatasetId) {
+      showNotification("请选择数据集", "error");
+      return;
+    }
 
-      if (exists) {
-          if (!allowOverwrite) {
-              showNotification("实验名称已存在。请修改名称或勾选“同名覆盖”。", "error");
-              return;
-          } else {
-             // Overwrite Logic: Remove existing
-             updatedExperiments = updatedExperiments.filter(e => e.name !== formName);
-             showNotification("旧实验记录已覆盖", "success");
-          }
-      }
+    // Check for duplicate name
+    const exists = experiments.some(e => e.name === formName);
 
-      const newId = Date.now().toString();
-      const newExperiment: Experiment = {
-          id: newId,
-          name: formName,
-          task: formTask,
-          model: formModel || 'YOLOv8',
-          dataset: formDataset || 'Urban_Traffic_V2',
-          augmentation: formAugmentation || 'Default',
-          status: 'running',
-          duration: '0s',
-          accuracy: '0.00',
-          startedAt: 'Just now',
-          config: config
+    if (exists && !allowOverwrite) {
+      showNotification("实验名称已存在。请修改名称或勾选同名覆盖。", "error");
+      return;
+    }
+
+    try {
+      setLoading(true);
+
+      // 构建训练配置
+      const trainingConfig = {
+        task_type: formTask,
+        epochs: config.epochs || 100,
+        batch_size: config.batch_size || 16,
+        learning_rate: config.learning_rate || 0.001,
+        optimizer: config.optimizer || 'Adam',
+        device: config.device || 'cuda',
+        ...config
       };
 
-      setExperiments([newExperiment, ...updatedExperiments]);
-      setSelectedExpId(newId);
-      
-      // Critical: Generate logs BEFORE view switch so they are ready
-      generateDummyLogs(newExperiment.name);
-      
-      // Critical: Ensure state updates before switching view
-      setTimeout(() => {
-          setView('detail');
-      }, 50);
+      // 如果选择了权重，添加到配置中
+      if (formWeightId) {
+        trainingConfig.pretrained_weight_id = formWeightId;
+      }
+
+      // 如果选择了增强策略，添加到配置中
+      if (formAugmentationId) {
+        trainingConfig.augmentation_strategy_id = formAugmentationId;
+      }
+
+      await trainingService.createTrainingRun({
+        name: formName,
+        description: `训练任务: ${formName}`,
+        model_id: formModelFileId,
+        dataset_id: formDatasetId,
+        config: trainingConfig,
+        user_id: 1 // TODO: 从认证中获取用户ID
+      });
+
+      showNotification("训练任务创建成功", "success");
+
+      // 刷新列表
+      await fetchExperiments();
+
+      // 重置表单
+      setFormName('');
+      setFormModelFileId(null);
+      setFormDatasetId(null);
+      setFormAugmentationId(null);
+      setFormWeightId(null);
+
+      // 切换到列表视图
+      setView('list');
+
+    } catch (err) {
+      const message = err instanceof Error ? err.message : '创建训练任务失败';
+      showNotification(message, 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // 删除训练任务
+  const handleDeleteExperiment = async (id: number, name: string) => {
+    try {
+      await trainingService.deleteTrainingRun(id);
+      showNotification(`实验「${name}」已删除`, 'success');
+      await fetchExperiments();
+      setDeleteModal({ isOpen: false, id: null, name: '' });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : '删除失败';
+      showNotification(message, 'error');
+    }
   };
 
   // --- Actions Implementations ---
@@ -556,42 +683,59 @@ const TrainingMonitor: React.FC = () => {
       setDummyLogs(logs);
   };
 
-  const toggleExperimentStatus = (id: string) => {
-      setExperiments(prev => prev.map(e => {
-          if (e.id === id) {
-              const newStatus = e.status === 'running' ? 'paused' : 'running';
-              showNotification(`实验已${newStatus === 'paused' ? '暂停' : '继续'}`, 'success');
-              return { ...e, status: newStatus };
-          }
-          return e;
-      }));
+  const toggleExperimentStatus = async (id: number) => {
+      const exp = experiments.find(e => e.id === id);
+      if (!exp) return;
+
+      const action = exp.status === 'running' ? 'pause' : 'resume';
+
+      try {
+          await trainingService.controlTraining(id, action);
+          showNotification(`实验已${action === 'pause' ? '暂停' : '继续'}`, 'success');
+          await fetchExperiments();
+      } catch (err) {
+          const message = err instanceof Error ? err.message : '操作失败';
+          showNotification(message, 'error');
+      }
   };
 
   // Trigger Modal
-  const handleStopClick = (id: string) => {
+  const handleStopClick = (id: number) => {
       setStopModal({ isOpen: true, id });
   };
 
   // Confirm Stop
-  const confirmStop = () => {
+  const confirmStop = async () => {
       if (stopModal.id) {
-          setExperiments(prev => prev.map(e => e.id === stopModal.id ? { ...e, status: 'failed' } : e));
-          showNotification("实验已强制停止", "error");
+          try {
+              await trainingService.controlTraining(stopModal.id, 'stop');
+              showNotification("实验已强制停止", "success");
+              await fetchExperiments();
+          } catch (err) {
+              const message = err instanceof Error ? err.message : '操作失败';
+              showNotification(message, 'error');
+          }
       }
       setStopModal({ isOpen: false, id: null });
   };
 
   // Trigger Rename
-  const handleRenameClick = (id: string, currentName: string) => {
+  const handleRenameClick = (id: number, currentName: string) => {
       setRenameModal({ isOpen: true, id, currentName });
       setActiveDropdownId(null);
   }
 
   // Confirm Rename
-  const confirmRename = (newName: string) => {
+  const confirmRename = async (newName: string) => {
       if (renameModal.id && newName.trim()) {
-          setExperiments(prev => prev.map(e => e.id === renameModal.id ? { ...e, name: newName } : e));
-          showNotification("实验已重命名", "success");
+          try {
+              await trainingService.updateTrainingRun(renameModal.id, { name: newName });
+              showNotification("实验已重命名", "success");
+              await fetchExperiments();
+          } catch (err) {
+              const message = err instanceof Error ? err.message : '重命名失败';
+              showNotification(message, 'error');
+          }
       }
       setRenameModal({ isOpen: false, id: null, currentName: '' });
   }
@@ -733,80 +877,104 @@ const TrainingMonitor: React.FC = () => {
 
         {/* Table */}
         <div className="flex-1 overflow-y-auto custom-scrollbar bg-slate-900/20 rounded-xl border border-slate-800">
-            <table className="w-full text-left border-collapse">
-                <thead className="bg-slate-900/80 backdrop-blur sticky top-0 z-10 text-xs font-bold text-slate-500 uppercase tracking-wider">
-                    <tr>
-                        <th className="p-4 border-b border-slate-800">Status</th>
-                        <th className="p-4 border-b border-slate-800">Experiment Name</th>
-                        <th className="p-4 border-b border-slate-800">Type</th>
-                        <th className="p-4 border-b border-slate-800">Dataset</th>
-                        <th className="p-4 border-b border-slate-800">Duration</th>
-                        <th className="p-4 border-b border-slate-800 text-right">Metric</th>
-                        <th className="p-4 border-b border-slate-800 text-right">Actions</th>
-                    </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-800 text-sm">
-                    {experiments.map(exp => (
-                        <tr 
-                          key={exp.id} 
-                          onClick={() => { setSelectedExpId(exp.id); setView('detail'); generateDummyLogs(exp.name); }}
-                          className="hover:bg-slate-800/50 cursor-pointer transition-colors group"
-                        >
-                            <td className="p-4">
-                                <StatusBadge status={exp.status} />
-                            </td>
-                            <td className="p-4">
-                                <div className="font-bold text-white group-hover:text-cyan-400 transition-colors">{exp.name}</div>
-                                <div className="text-xs text-slate-500 font-mono">ID: #{exp.id}</div>
-                            </td>
-                            <td className="p-4">
-                                <div className="flex items-center space-x-2 text-slate-300 capitalize">
-                                   <TaskIcon task={exp.task} />
-                                   <span>{exp.task}</span>
-                                </div>
-                            </td>
-                            <td className="p-4 text-slate-300">
-                                <div>{exp.dataset}</div>
-                                <div className="text-[10px] text-slate-500 flex items-center mt-0.5"><Wand2 size={8} className="mr-1"/>{exp.augmentation}</div>
-                            </td>
-                            <td className="p-4 text-slate-400 font-mono">{exp.duration}</td>
-                            <td className="p-4 text-right font-mono font-bold text-white">{exp.accuracy}</td>
-                            <td className="p-4 text-right relative">
-                                <button 
-                                    onClick={(e) => { 
-                                        e.stopPropagation(); 
-                                        setActiveDropdownId(activeDropdownId === exp.id ? null : exp.id);
-                                    }}
-                                    className={`p-2 rounded-lg transition-colors ${activeDropdownId === exp.id ? 'bg-slate-700 text-white' : 'text-slate-500 hover:text-white hover:bg-slate-700'}`}
-                                >
-                                    <MoreHorizontal size={16} />
-                                </button>
-                                {activeDropdownId === exp.id && (
-                                    <div 
-                                        ref={dropdownRef}
-                                        className="absolute right-8 top-10 w-32 bg-slate-900 border border-slate-700 rounded-lg shadow-xl z-50 overflow-hidden animate-in fade-in zoom-in duration-100"
-                                        onClick={(e) => e.stopPropagation()}
-                                    >
-                                        <button 
-                                            onClick={() => handleRenameClick(exp.id, exp.name)}
-                                            className="w-full text-left px-4 py-2 text-xs text-slate-300 hover:text-white hover:bg-slate-800 flex items-center"
-                                        >
-                                            <Edit3 size={12} className="mr-2" /> 重命名
-                                        </button>
-                                        {/* Placeholder for future actions */}
-                                        <button 
-                                            onClick={() => { showNotification("功能开发中...", "info"); setActiveDropdownId(null); }}
-                                            className="w-full text-left px-4 py-2 text-xs text-slate-300 hover:text-white hover:bg-slate-800 flex items-center"
-                                        >
-                                            <Trash2 size={12} className="mr-2" /> 删除
-                                        </button>
-                                    </div>
-                                )}
-                            </td>
+            {loading ? (
+                <div className="flex items-center justify-center h-full">
+                    <Loader2 className="animate-spin text-cyan-500" size={32} />
+                </div>
+            ) : experiments.length === 0 ? (
+                <div className="flex flex-col items-center justify-center h-full text-slate-500">
+                    <AlertCircle size={48} className="mb-4 opacity-50" />
+                    <p className="text-lg">暂无训练任务</p>
+                    <p className="text-sm">点击"新建实验"开始创建训练任务</p>
+                </div>
+            ) : (
+                <table className="w-full text-left border-collapse">
+                    <thead className="bg-slate-900/80 backdrop-blur sticky top-0 z-10 text-xs font-bold text-slate-500 uppercase tracking-wider">
+                        <tr>
+                            <th className="p-4 border-b border-slate-800">Status</th>
+                            <th className="p-4 border-b border-slate-800">Experiment Name</th>
+                            <th className="p-4 border-b border-slate-800">Type</th>
+                            <th className="p-4 border-b border-slate-800">Dataset</th>
+                            <th className="p-4 border-b border-slate-800">Duration</th>
+                            <th className="p-4 border-b border-slate-800 text-right">Metric</th>
+                            <th className="p-4 border-b border-slate-800 text-right">Actions</th>
                         </tr>
-                    ))}
-                </tbody>
-            </table>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800 text-sm">
+                        {experiments.map(exp => (
+                            <tr
+                              key={exp.id}
+                              onClick={() => {
+                                setSelectedExpId(exp.id);
+                                setView('detail');
+                                // 加载该任务的日志和指标
+                                trainingService.getLogs(exp.id, undefined, 50).then(logs => {
+                                  setDummyLogs(logs.map(l => `[${l.level}] ${l.message}`));
+                                });
+                              }}
+                              className="hover:bg-slate-800/50 cursor-pointer transition-colors group"
+                            >
+                                <td className="p-4">
+                                    <StatusBadge status={exp.status} />
+                                </td>
+                                <td className="p-4">
+                                    <div className="font-bold text-white group-hover:text-cyan-400 transition-colors">{exp.name}</div>
+                                    <div className="text-xs text-slate-500 font-mono">ID: #{exp.id}</div>
+                                </td>
+                                <td className="p-4">
+                                    <div className="flex items-center space-x-2 text-slate-300 capitalize">
+                                       <TaskIcon task={exp.task} />
+                                       <span>{exp.task}</span>
+                                    </div>
+                                </td>
+                                <td className="p-4 text-slate-300">
+                                    <div>{exp.datasetName || `Dataset #${exp.datasetId}`}</div>
+                                    <div className="text-[10px] text-slate-500 flex items-center mt-0.5">
+                                        <Wand2 size={8} className="mr-1"/>
+                                        {exp.augmentationName || 'Default'}
+                                    </div>
+                                </td>
+                                <td className="p-4 text-slate-400 font-mono">{exp.duration}</td>
+                                <td className="p-4 text-right font-mono font-bold text-white">{exp.accuracy}</td>
+                                <td className="p-4 text-right relative">
+                                    <button
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            setActiveDropdownId(activeDropdownId === exp.id ? null : exp.id);
+                                        }}
+                                        className={`p-2 rounded-lg transition-colors ${activeDropdownId === exp.id ? 'bg-slate-700 text-white' : 'text-slate-500 hover:text-white hover:bg-slate-700'}`}
+                                    >
+                                        <MoreHorizontal size={16} />
+                                    </button>
+                                    {activeDropdownId === exp.id && (
+                                        <div
+                                            ref={dropdownRef}
+                                            className="absolute right-8 top-10 w-32 bg-slate-900 border border-slate-700 rounded-lg shadow-xl z-50 overflow-hidden animate-in fade-in zoom-in duration-100"
+                                            onClick={(e) => e.stopPropagation()}
+                                        >
+                                            <button
+                                                onClick={() => handleRenameClick(exp.id, exp.name)}
+                                                className="w-full text-left px-4 py-2 text-xs text-slate-300 hover:text-white hover:bg-slate-800 flex items-center"
+                                            >
+                                                <Edit3 size={12} className="mr-2" /> 重命名
+                                            </button>
+                                            <button
+                                                onClick={() => {
+                                                    setDeleteModal({ isOpen: true, id: exp.id, name: exp.name });
+                                                    setActiveDropdownId(null);
+                                                }}
+                                                className="w-full text-left px-4 py-2 text-xs text-rose-400 hover:text-rose-300 hover:bg-rose-900/20 flex items-center"
+                                            >
+                                                <Trash2 size={12} className="mr-2" /> 删除
+                                            </button>
+                                        </div>
+                                    )}
+                                </td>
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+            )}
         </div>
     </div>
   );
@@ -905,13 +1073,43 @@ const TrainingMonitor: React.FC = () => {
                                 </div>
 
                                 <div className="group">
-                                    <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1 group-hover:text-slate-400 transition-colors">模型架构</label>
+                                    <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1 group-hover:text-slate-400 transition-colors">模型文件</label>
                                     <div className="relative">
                                         <Layers size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
-                                        <select style={{ colorScheme: 'dark' }} value={formModel} onChange={e => setFormModel(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded pl-9 pr-3 py-2 text-white text-sm outline-none focus:border-cyan-500 transition-colors appearance-none cursor-pointer">
-                                            <option value="">Select Architecture...</option>
-                                            {formTask === 'detection' && <><option>YOLOv8</option><option>YOLOv5</option><option>Faster-RCNN</option></>}
-                                            {formTask === 'classification' && <><option>ResNet50</option><option>ViT-Base</option><option>EfficientNet</option></>}
+                                        <select
+                                            style={{ colorScheme: 'dark' }}
+                                            value={formModelFileId || ''}
+                                            onChange={e => setFormModelFileId(e.target.value ? Number(e.target.value) : null)}
+                                            className="w-full bg-slate-950 border border-slate-700 rounded pl-9 pr-3 py-2 text-white text-sm outline-none focus:border-cyan-500 transition-colors appearance-none cursor-pointer"
+                                        >
+                                            <option value="">Select Model File...</option>
+                                            {modelFiles.map((mf) => (
+                                                <option key={mf.id} value={mf.id}>
+                                                    {mf.name} ({mf.file_name})
+                                                </option>
+                                            ))}
+                                        </select>
+                                        <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none" />
+                                    </div>
+                                </div>
+
+                                {/* 权重选择 */}
+                                <div className="group">
+                                    <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1 group-hover:text-slate-400 transition-colors">预训练权重 (可选)</label>
+                                    <div className="relative">
+                                        <HardDrive size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
+                                        <select
+                                            style={{ colorScheme: 'dark' }}
+                                            value={formWeightId || ''}
+                                            onChange={e => setFormWeightId(e.target.value ? Number(e.target.value) : null)}
+                                            className="w-full bg-slate-950 border border-slate-700 rounded pl-9 pr-3 py-2 text-white text-sm outline-none focus:border-cyan-500 transition-colors appearance-none cursor-pointer"
+                                        >
+                                            <option value="">None (从头训练)</option>
+                                            {weights.map((w) => (
+                                                <option key={w.id} value={w.id}>
+                                                    {w.display_name} ({w.task_type})
+                                                </option>
+                                            ))}
                                         </select>
                                         <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none" />
                                     </div>
@@ -921,27 +1119,40 @@ const TrainingMonitor: React.FC = () => {
                                     <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1 group-hover:text-slate-400 transition-colors">数据集</label>
                                     <div className="relative">
                                         <Database size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
-                                        <select style={{ colorScheme: 'dark' }} value={formDataset} onChange={e => setFormDataset(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded pl-9 pr-3 py-2 text-white text-sm outline-none focus:border-cyan-500 transition-colors appearance-none cursor-pointer">
+                                        <select
+                                            style={{ colorScheme: 'dark' }}
+                                            value={formDatasetId || ''}
+                                            onChange={e => setFormDatasetId(e.target.value ? Number(e.target.value) : null)}
+                                            className="w-full bg-slate-950 border border-slate-700 rounded pl-9 pr-3 py-2 text-white text-sm outline-none focus:border-cyan-500 transition-colors appearance-none cursor-pointer"
+                                        >
                                             <option value="">Select Dataset...</option>
-                                            <option>Urban_Traffic_V2</option>
-                                            <option>Medical_MRI</option>
-                                            <option>COCO_2017</option>
+                                            {datasets.map((ds) => (
+                                                <option key={ds.id} value={ds.id}>
+                                                    {ds.name} ({ds.format}, {ds.num_images} images)
+                                                </option>
+                                            ))}
                                         </select>
                                         <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none" />
                                     </div>
                                 </div>
-                                
-                                {/* New Augmentation Selector */}
+
+                                {/* 增强策略选择 */}
                                 <div className="group">
-                                    <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1 group-hover:text-slate-400 transition-colors">增强策略 (Augmentation)</label>
+                                    <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1 group-hover:text-slate-400 transition-colors">增强策略 (可选)</label>
                                     <div className="relative">
                                         <Wand2 size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
-                                        <select style={{ colorScheme: 'dark' }} value={formAugmentation} onChange={e => setFormAugmentation(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded pl-9 pr-3 py-2 text-white text-sm outline-none focus:border-cyan-500 transition-colors appearance-none cursor-pointer">
-                                            <option value="">Select Strategy...</option>
-                                            <option>YOLO Default Train</option>
-                                            <option>Medical MRI Cleaner</option>
-                                            <option>Weather Robustness</option>
-                                            <option>No Augmentation</option>
+                                        <select
+                                            style={{ colorScheme: 'dark' }}
+                                            value={formAugmentationId || ''}
+                                            onChange={e => setFormAugmentationId(e.target.value ? Number(e.target.value) : null)}
+                                            className="w-full bg-slate-950 border border-slate-700 rounded pl-9 pr-3 py-2 text-white text-sm outline-none focus:border-cyan-500 transition-colors appearance-none cursor-pointer"
+                                        >
+                                            <option value="">Default (无增强)</option>
+                                            {augmentationStrategies.map((as) => (
+                                                <option key={as.id} value={as.id}>
+                                                    {as.name}
+                                                </option>
+                                            ))}
                                         </select>
                                         <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none" />
                                     </div>
@@ -1000,9 +1211,32 @@ const TrainingMonitor: React.FC = () => {
 
   // --- View 3: Experiment Detail / Monitor ---
   const renderDetail = () => {
-    const exp = experiments.find(e => e.id === selectedExpId) || experiments[0];
+    const exp = experiments.find(e => e.id === selectedExpId);
+    if (!exp) {
+      return (
+        <div className="h-full flex items-center justify-center text-slate-500">
+          <p>实验不存在</p>
+        </div>
+      );
+    }
+
     const isRunning = exp.status === 'running';
     const isCompleted = exp.status === 'completed';
+
+    // 构建图表数据 - 使用realTimeMetrics或模拟数据
+    const chartData = realTimeMetrics.length > 0
+      ? realTimeMetrics.map(m => ({
+          epoch: m.epoch || 0,
+          trainLoss: m.train_loss ?? 0,
+          valLoss: m.val_loss ?? 0,
+          metric: m.val_acc ?? m.train_acc ?? 0
+        }))
+      : (exp.currentEpoch > 0 ? Array.from({ length: exp.currentEpoch }, (_, i) => ({
+          epoch: i + 1,
+          trainLoss: Math.max(0.1, 2.5 * Math.exp(-i * 0.05) + Math.random() * 0.3),
+          valLoss: Math.max(0.15, 2.8 * Math.exp(-i * 0.045) + Math.random() * 0.4),
+          metric: Math.min(0.95, 0.3 + i * 0.012 + Math.random() * 0.05)
+        })) : []);
 
     return (
         <div className="h-full flex flex-col p-6 space-y-6 overflow-y-auto">
@@ -1022,41 +1256,41 @@ const TrainingMonitor: React.FC = () => {
                             <span>•</span>
                             <span className="flex items-center capitalize"><TaskIcon task={exp.task} /><span className="ml-1">{exp.task}</span></span>
                             <span>•</span>
-                            <span>{exp.model}</span>
+                            <span>{exp.modelName || `Model #${exp.modelId}`}</span>
                             <span>•</span>
-                            <span className="flex items-center"><Wand2 size={12} className="mr-1 text-slate-500" /> {exp.augmentation}</span>
+                            <span className="flex items-center"><Wand2 size={12} className="mr-1 text-slate-500" /> {exp.augmentationName || 'Default'}</span>
                         </p>
                     </div>
                  </div>
-                 
+
                  {/* Action Bar */}
                  <div className="flex items-center space-x-3">
                      {/* Pause / Resume / Stop Controls */}
                      {(exp.status === 'running' || exp.status === 'paused') && (
                          <div className="flex items-center space-x-2 bg-slate-900 p-1.5 rounded-lg border border-slate-800">
-                            <button 
+                            <button
                                 onClick={() => toggleExperimentStatus(exp.id)}
-                                className={`p-2 rounded hover:bg-slate-800 transition-colors ${exp.status === 'running' ? 'text-amber-400' : 'text-emerald-400'}`} 
+                                className={`p-2 rounded hover:bg-slate-800 transition-colors ${exp.status === 'running' ? 'text-amber-400' : 'text-emerald-400'}`}
                                 title={exp.status === 'running' ? 'Pause' : 'Resume'}
                             >
                                 {exp.status === 'running' ? <Pause size={18} /> : <Play size={18} />}
                             </button>
-                            <button 
+                            <button
                                 onClick={() => handleStopClick(exp.id)}
-                                className="p-2 rounded hover:bg-slate-800 text-rose-500" 
+                                className="p-2 rounded hover:bg-slate-800 text-rose-500"
                                 title="Stop"
                             >
                                 <Square size={18} />
                             </button>
                          </div>
                      )}
-                     <button 
+                     <button
                         onClick={() => setShowLogModal(true)}
                         className="flex items-center px-3 py-2 bg-slate-900 hover:bg-slate-800 text-slate-300 text-xs font-bold rounded border border-slate-700 transition-colors"
                      >
                         <Terminal size={14} className="mr-2" /> 查看日志
                      </button>
-                     <button 
+                     <button
                         onClick={() => handleSaveToRegistry(exp)}
                         disabled={!isCompleted}
                         title={!isCompleted ? "训练未完成，无法导出" : "将权重保存到权重库"}
@@ -1074,7 +1308,7 @@ const TrainingMonitor: React.FC = () => {
                    <h3 className="text-slate-300 font-medium mb-4 text-sm flex items-center"><Activity size={14} className="mr-2 text-slate-500"/> Loss Curve</h3>
                    <div className="flex-1 min-h-0">
                       <ResponsiveContainer width="100%" height="100%">
-                         <LineChart data={TRAINING_CHART_DATA}>
+                         <LineChart data={chartData}>
                             <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
                             <XAxis dataKey="epoch" stroke="#64748b" fontSize={10} tickLine={false} axisLine={false} />
                             <YAxis stroke="#64748b" fontSize={10} tickLine={false} axisLine={false} />
@@ -1092,7 +1326,7 @@ const TrainingMonitor: React.FC = () => {
                    <h3 className="text-slate-300 font-medium mb-4 text-sm flex items-center"><Target size={14} className="mr-2 text-slate-500"/> Metric ({exp.task === 'classification' ? 'Accuracy' : 'mAP'})</h3>
                    <div className="flex-1 min-h-0">
                       <ResponsiveContainer width="100%" height="100%">
-                         <AreaChart data={TRAINING_CHART_DATA}>
+                         <AreaChart data={chartData}>
                             <defs>
                                 <linearGradient id="colorMetric" x1="0" y1="0" x2="0" y2="1">
                                     <stop offset="5%" stopColor="#10b981" stopOpacity={0.3}/>
@@ -1103,7 +1337,7 @@ const TrainingMonitor: React.FC = () => {
                             <XAxis dataKey="epoch" stroke="#64748b" fontSize={10} tickLine={false} axisLine={false} />
                             <YAxis stroke="#64748b" fontSize={10} domain={[0, 1]} tickLine={false} axisLine={false} />
                             <Tooltip contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155', borderRadius: '8px' }} itemStyle={{ fontSize: '12px' }} />
-                            <Area type="monotone" dataKey="metric" stroke="#10b981" strokeWidth={2} fillOpacity={1} fill="url(#colorMetric)" name="mAP@0.5:0.95" />
+                            <Area type="monotone" dataKey="metric" stroke="#10b981" strokeWidth={2} fillOpacity={1} fill="url(#colorMetric)" name={exp.task === 'classification' ? 'Accuracy' : 'mAP'} />
                          </AreaChart>
                       </ResponsiveContainer>
                    </div>
@@ -1116,9 +1350,9 @@ const TrainingMonitor: React.FC = () => {
                     <div className="flex justify-between items-center mb-4">
                         <h3 className="text-white font-bold text-sm">Configuration Summary</h3>
                         <div className="flex space-x-2">
-                            <button 
+                            <button
                                 onClick={() => setShowConfigModal(true)}
-                                className="p-1.5 text-slate-400 hover:text-cyan-400 hover:bg-slate-800 rounded transition-colors" 
+                                className="p-1.5 text-slate-400 hover:text-cyan-400 hover:bg-slate-800 rounded transition-colors"
                                 title="预览参数 JSON"
                             >
                                 <Eye size={16} />
@@ -1128,23 +1362,23 @@ const TrainingMonitor: React.FC = () => {
                     <div className="grid grid-cols-2 md:grid-cols-3 gap-y-4 gap-x-8 text-sm">
                         <div>
                             <span className="block text-slate-500 text-xs uppercase mb-1">Optimizer</span>
-                            <span className="text-slate-300 font-mono">SGD</span>
+                            <span className="text-slate-300 font-mono">{exp.config?.optimizer || 'Adam'}</span>
                         </div>
                         <div>
                             <span className="block text-slate-500 text-xs uppercase mb-1">Learning Rate</span>
-                            <span className="text-slate-300 font-mono">0.01</span>
+                            <span className="text-slate-300 font-mono">{exp.config?.learning_rate || '0.001'}</span>
                         </div>
                         <div>
                             <span className="block text-slate-500 text-xs uppercase mb-1">Batch Size</span>
-                            <span className="text-slate-300 font-mono">32</span>
+                            <span className="text-slate-300 font-mono">{exp.config?.batch_size || 32}</span>
                         </div>
                         <div>
                             <span className="block text-slate-500 text-xs uppercase mb-1">Image Size</span>
-                            <span className="text-slate-300 font-mono">640x640</span>
+                            <span className="text-slate-300 font-mono">{exp.config?.input_size || 224}x{exp.config?.input_size || 224}</span>
                         </div>
                         <div>
                             <span className="block text-slate-500 text-xs uppercase mb-1">Device</span>
-                            <span className="text-slate-300 font-mono">4x A100</span>
+                            <span className="text-slate-300 font-mono">{exp.device || 'cuda'}</span>
                         </div>
                         <div>
                              <span className="block text-slate-500 text-xs uppercase mb-1">Started At</span>
@@ -1152,21 +1386,21 @@ const TrainingMonitor: React.FC = () => {
                         </div>
                     </div>
                 </div>
-                
+
                 <div className="glass-panel p-6 rounded-xl border border-slate-800 flex flex-col justify-center space-y-4">
                     <div className="flex justify-between items-center">
-                        <span className="text-slate-500 text-sm">Best Epoch</span>
-                        <span className="text-white font-mono font-bold">48</span>
+                        <span className="text-slate-500 text-sm">Current Epoch</span>
+                        <span className="text-white font-mono font-bold">{exp.currentEpoch}/{exp.totalEpochs}</span>
+                    </div>
+                    <div className="w-full h-px bg-slate-800"></div>
+                    <div className="flex justify-between items-center">
+                        <span className="text-slate-500 text-sm">Progress</span>
+                        <span className="text-cyan-400 font-mono font-bold">{exp.progress.toFixed(1)}%</span>
                     </div>
                     <div className="w-full h-px bg-slate-800"></div>
                     <div className="flex justify-between items-center">
                         <span className="text-slate-500 text-sm">Best Metric</span>
                         <span className="text-emerald-400 font-mono font-bold">{exp.accuracy}</span>
-                    </div>
-                    <div className="w-full h-px bg-slate-800"></div>
-                    <div className="flex justify-between items-center">
-                        <span className="text-slate-500 text-sm">Est. Time Left</span>
-                        <span className="text-cyan-400 font-mono font-bold">{isRunning ? '1h 24m' : '-'}</span>
                     </div>
                 </div>
             </div>
@@ -1183,11 +1417,11 @@ const TrainingMonitor: React.FC = () => {
       {/* GLOBAL NOTIFICATION (Fixed Position to avoid layout shift) */}
       {notification && (
         <div className={`fixed top-6 left-1/2 -translate-x-1/2 z-[200] px-4 py-2 rounded-lg shadow-lg border flex items-center ${
-            notification.type === 'error' ? 'bg-rose-900/90 border-rose-500 text-white' : 
+            notification.type === 'error' ? 'bg-rose-900/90 border-rose-500 text-white' :
             notification.type === 'success' ? 'bg-emerald-900/90 border-emerald-500 text-white' :
             'bg-cyan-900/90 border-cyan-500 text-white'
         }`}>
-           {notification.type === 'error' ? <AlertTriangle size={16} className="mr-2" /> : 
+           {notification.type === 'error' ? <AlertTriangle size={16} className="mr-2" /> :
             notification.type === 'success' ? <CheckCircle size={16} className="mr-2" /> :
             <HelpCircle size={16} className="mr-2" />
            }
@@ -1196,8 +1430,8 @@ const TrainingMonitor: React.FC = () => {
       )}
 
       {/* STOP CONFIRMATION MODAL */}
-      <ConfirmModal 
-        isOpen={stopModal.isOpen} 
+      <ConfirmModal
+        isOpen={stopModal.isOpen}
         onClose={() => setStopModal({isOpen: false, id: null})}
         onConfirm={confirmStop}
         title="停止训练"
@@ -1206,11 +1440,21 @@ const TrainingMonitor: React.FC = () => {
       />
 
       {/* RENAME MODAL */}
-      <RenameModal 
+      <RenameModal
          isOpen={renameModal.isOpen}
          onClose={() => setRenameModal({isOpen: false, id: null, currentName: ''})}
          onConfirm={confirmRename}
          initialName={renameModal.currentName}
+      />
+
+      {/* DELETE CONFIRMATION MODAL */}
+      <ConfirmModal
+        isOpen={deleteModal.isOpen}
+        onClose={() => setDeleteModal({isOpen: false, id: null, name: ''})}
+        onConfirm={() => deleteModal.id && handleDeleteExperiment(deleteModal.id, deleteModal.name)}
+        title="删除训练任务"
+        msg={`确定要删除训练任务「${deleteModal.name}」吗？此操作不可恢复，相关的日志和checkpoint也将被删除。`}
+        type="danger"
       />
 
       {view === 'list' && renderList()}

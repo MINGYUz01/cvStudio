@@ -5,13 +5,21 @@
 
 import asyncio
 import torch
+import torch.nn as nn
+import torch.optim as optim
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Tuple, List
 from datetime import datetime
 from loguru import logger
 
 from app.utils.training_logger import training_logger, TrainingStatus
 from app.api.websocket import manager
+
+# 导入训练组件
+from app.utils.data_loaders.factory import DataLoaderFactory
+from app.utils.models.factory import ModelFactory
+from app.utils.losses.factory import LossFactory
+from app.utils.metrics.calculator import MetricsCalculator
 
 
 class TrainingSignals:
@@ -57,6 +65,19 @@ class Trainer:
         # 设备配置
         self.device = self._setup_device()
 
+        # 训练组件（延迟初始化）
+        self._initialized = False
+        self.model: Optional[nn.Module] = None
+        self.optimizer: Optional[optim.Optimizer] = None
+        self.scheduler: Optional[optim.lr_scheduler._LRScheduler] = None
+        self.criterion: Optional[nn.Module] = None
+        self.train_loader = None
+        self.val_loader = None
+        self.metrics_calculator: Optional[MetricsCalculator] = None
+
+        # 获取任务类型
+        self.task_type = config.get("task_type", "classification")
+
     def _setup_device(self) -> torch.device:
         """
         设置训练设备
@@ -78,6 +99,148 @@ class Trainer:
 
         return device
 
+    def _setup_training(self):
+        """
+        设置训练所需的所有组件
+        包括数据加载器、模型、优化器、损失函数、学习率调度器、指标计算器
+        """
+        self.logger.info("开始初始化训练组件...")
+
+        # 1. 创建数据加载器
+        try:
+            self.train_loader, self.val_loader = DataLoaderFactory.create({
+                'task_type': self.task_type,
+                'dataset_format': self.config.get('dataset_format', 'classification'),
+                'dataset_path': self.config.get('dataset_path'),
+                'batch_size': self.config.get('batch_size', 32),
+                'image_size': self.config.get('image_size', 224),
+                'num_classes': self.config.get('num_classes', 10),
+                'augmentation': self.config.get('augmentation', {}),
+                'train_val_split': self.config.get('train_val_split', 0.8),
+                'num_workers': self.config.get('num_workers', 4),
+                'pin_memory': self.config.get('pin_memory', True),
+                'device': str(self.device)
+            })
+            self.logger.info(f"数据加载器创建成功: 训练集{len(self.train_loader)}批次, 验证集{len(self.val_loader)}批次")
+        except Exception as e:
+            self.logger.error(f"数据加载器创建失败: {e}")
+            raise
+
+        # 2. 创建模型
+        try:
+            self.model = ModelFactory.create({
+                'task_type': self.task_type,
+                'architecture': self.config.get('model_architecture', 'resnet18'),
+                'num_classes': self.config.get('num_classes', 10),
+                'input_channels': self.config.get('input_channels', 3),
+                'pretrained': self.config.get('pretrained', False),
+                'dropout': self.config.get('dropout', 0.0)
+            })
+            self.model.to(self.device)
+            self.logger.info(f"模型创建成功: {self.config.get('model_architecture', 'resnet18')}")
+        except Exception as e:
+            self.logger.error(f"模型创建失败: {e}")
+            raise
+
+        # 3. 创建优化器
+        try:
+            self.optimizer = self._create_optimizer()
+            self.logger.info(f"优化器创建成功: {self.config.get('optimizer', 'adam')}")
+        except Exception as e:
+            self.logger.error(f"优化器创建失败: {e}")
+            raise
+
+        # 4. 创建损失函数
+        try:
+            self.criterion = LossFactory.create(self.task_type, self.config)
+            self.criterion.to(self.device)
+            self.logger.info("损失函数创建成功")
+        except Exception as e:
+            self.logger.error(f"损失函数创建失败: {e}")
+            raise
+
+        # 5. 创建学习率调度器
+        try:
+            scheduler_config = self.config.get('scheduler')
+            if scheduler_config:
+                self.scheduler = self._create_scheduler()
+                self.logger.info(f"学习率调度器创建成功: {scheduler_config.get('type', 'step')}")
+        except Exception as e:
+            self.logger.warning(f"学习率调度器创建失败: {e}，将不使用调度器")
+
+        # 6. 创建指标计算器
+        self.metrics_calculator = MetricsCalculator(self.task_type)
+        self.logger.info("指标计算器创建成功")
+
+        # 标记初始化完成
+        self._initialized = True
+        self.logger.info("训练组件初始化完成")
+
+    def _create_optimizer(self) -> optim.Optimizer:
+        """
+        创建优化器
+
+        Returns:
+            PyTorch优化器
+        """
+        optimizer_type = self.config.get('optimizer', 'adam').lower()
+        lr = self.config.get('learning_rate', 0.001)
+        weight_decay = self.config.get('weight_decay', 0.0)
+        momentum = self.config.get('momentum', 0.9)
+
+        if optimizer_type == 'adam':
+            return optim.Adam(
+                self.model.parameters(),
+                lr=lr,
+                weight_decay=weight_decay
+            )
+        elif optimizer_type == 'adamw':
+            return optim.AdamW(
+                self.model.parameters(),
+                lr=lr,
+                weight_decay=weight_decay
+            )
+        elif optimizer_type == 'sgd':
+            return optim.SGD(
+                self.model.parameters(),
+                lr=lr,
+                momentum=momentum,
+                weight_decay=weight_decay if weight_decay > 0 else 0.0005
+            )
+        else:
+            raise ValueError(f"不支持的优化器: {optimizer_type}")
+
+    def _create_scheduler(self) -> optim.lr_scheduler._LRScheduler:
+        """
+        创建学习率调度器
+
+        Returns:
+            PyTorch学习率调度器
+        """
+        scheduler_config = self.config.get('scheduler', {})
+        scheduler_type = scheduler_config.get('type', 'step').lower()
+
+        if scheduler_type == 'step':
+            return optim.lr_scheduler.StepLR(
+                self.optimizer,
+                step_size=scheduler_config.get('step_size', 30),
+                gamma=scheduler_config.get('gamma', 0.1)
+            )
+        elif scheduler_type == 'cosine':
+            return optim.lr_scheduler.CosineAnnealingLR(
+                self.optimizer,
+                T_max=scheduler_config.get('T_max', self.total_epochs)
+            )
+        elif scheduler_type == 'reduce_on_plateau':
+            return optim.lr_scheduler.ReduceLROnPlateau(
+                self.optimizer,
+                mode='min',
+                factor=scheduler_config.get('factor', 0.1),
+                patience=scheduler_config.get('patience', 10)
+            )
+        else:
+            raise ValueError(f"不支持的调度器: {scheduler_type}")
+
     def train(self) -> Dict[str, Any]:
         """
         执行训练
@@ -90,6 +253,10 @@ class Trainer:
         """
         try:
             self.logger.info(f"开始训练: {self.experiment_id}")
+
+            # 初始化训练组件（在第一个epoch时）
+            if not self._initialized:
+                self._setup_training()
 
             # 记录开始时间
             start_time = datetime.utcnow()
@@ -224,42 +391,140 @@ class Trainer:
             "trainer"
         )
 
-        # 这里是实际的训练逻辑
-        # 在实际实现中，这里应该：
-        # 1. 加载数据
-        # 2. 前向传播
-        # 3. 计算损失
-        # 4. 反向传播
-        # 5. 更新参数
+        # 设置模型为训练模式
+        self.model.train()
 
-        # 为了演示，这里返回模拟数据
-        # 实际使用时需要替换为真实的训练代码
-        import random
+        # 训练统计
+        train_loss = 0.0
+        train_correct = 0
+        train_total = 0
 
-        # 模拟训练指标（随epoch改善）
-        base_loss = 0.5 - (epoch * 0.005)  # loss逐渐降低
-        base_acc = 0.5 + (epoch * 0.004)  # accuracy逐渐提升
+        # 训练循环
+        for batch_idx, batch in enumerate(self.train_loader):
+            # 根据任务类型解包批次数据
+            if self.task_type == "classification":
+                images = batch['image'].to(self.device)
+                labels = batch['label'].to(self.device)
+            elif self.task_type == "detection":
+                images = batch['images'].to(self.device)
+                labels = batch['labels']
+                # 检测任务的处理比较复杂，暂时使用简化版本
+                continue
+            else:
+                self.logger.warning(f"不支持的任务类型: {self.task_type}")
+                continue
 
+            # 前向传播
+            self.optimizer.zero_grad()
+            outputs = self.model(images)
+
+            # 计算损失
+            if self.task_type == "classification":
+                loss = self.criterion(outputs, labels)
+
+                # 统计准确率
+                _, predicted = outputs.max(1)
+                train_total += labels.size(0)
+                train_correct += predicted.eq(labels).sum().item()
+
+            # 反向传播
+            loss.backward()
+
+            # 梯度裁剪（防止梯度爆炸）
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+
+            # 更新参数
+            self.optimizer.step()
+
+            # 累积损失
+            train_loss += loss.item()
+
+        # 计算平均训练指标
+        avg_train_loss = train_loss / len(self.train_loader)
+        train_accuracy = train_correct / train_total if train_total > 0 else 0.0
+
+        # 验证
+        val_metrics = self._validate_epoch(epoch)
+
+        # 组合指标
         metrics = {
-            "train_loss": max(0.01, base_loss + random.uniform(-0.01, 0.01)),
-            "train_acc": min(0.99, base_acc + random.uniform(-0.02, 0.02)),
-            "val_loss": max(0.02, base_loss + 0.02 + random.uniform(-0.01, 0.01)),
-            "val_acc": min(0.97, base_acc - 0.02 + random.uniform(-0.02, 0.02)),
+            "train_loss": avg_train_loss,
+            "train_acc": train_accuracy,
+            **val_metrics
         }
 
+        # 更新学习率调度器
+        if self.scheduler is not None:
+            if isinstance(self.scheduler, optim.lr_scheduler.ReduceLROnPlateau):
+                self.scheduler.step(metrics.get("val_loss", avg_train_loss))
+            else:
+                self.scheduler.step()
+
         # 添加日志
-        training_logger.add_log(
-            self.experiment_id,
-            "INFO",
-            f"Epoch {epoch + 1}/{self.total_epochs} - "
-            f"Loss: {metrics['train_loss']:.4f}, "
-            f"Acc: {metrics['train_acc']:.4f}, "
-            f"Val Loss: {metrics['val_loss']:.4f}, "
-            f"Val Acc: {metrics['val_acc']:.4f}",
-            "trainer"
-        )
+        if self.task_type == "classification":
+            training_logger.add_log(
+                self.experiment_id,
+                "INFO",
+                f"Epoch {epoch + 1}/{self.total_epochs} - "
+                f"Train Loss: {avg_train_loss:.4f}, "
+                f"Train Acc: {train_accuracy:.4f}, "
+                f"Val Loss: {metrics.get('val_loss', 0):.4f}, "
+                f"Val Acc: {metrics.get('val_acc', 0):.4f}",
+                "trainer"
+            )
 
         return metrics
+
+    def _validate_epoch(self, epoch: int) -> Dict[str, Any]:
+        """
+        验证一个epoch
+
+        Args:
+            epoch: 当前epoch编号
+
+        Returns:
+            验证指标字典
+        """
+        # 设置模型为评估模式
+        self.model.eval()
+
+        val_loss = 0.0
+        val_correct = 0
+        val_total = 0
+
+        with torch.no_grad():
+            for batch in self.val_loader:
+                # 根据任务类型解包批次数据
+                if self.task_type == "classification":
+                    images = batch['image'].to(self.device)
+                    labels = batch['label'].to(self.device)
+                elif self.task_type == "detection":
+                    continue  # 检测任务暂不实现验证
+                else:
+                    continue
+
+                # 前向传播
+                outputs = self.model(images)
+
+                # 计算损失
+                if self.task_type == "classification":
+                    loss = self.criterion(outputs, labels)
+
+                    # 统计准确率
+                    _, predicted = outputs.max(1)
+                    val_total += labels.size(0)
+                    val_correct += predicted.eq(labels).sum().item()
+
+                val_loss += loss.item()
+
+        # 计算平均验证指标
+        avg_val_loss = val_loss / len(self.val_loader)
+        val_accuracy = val_correct / val_total if val_total > 0 else 0.0
+
+        return {
+            "val_loss": avg_val_loss,
+            "val_acc": val_accuracy
+        }
 
     def _save_checkpoint(self, epoch: int, metrics: Dict[str, Any]):
         """
@@ -272,13 +537,11 @@ class Trainer:
         self.logger.info(f"保存checkpoint: epoch {epoch}")
 
         # 判断是否为最佳模型
-        task_type = self.config.get("task_type", "detection")
+        task_type = self.task_type
 
         # 根据任务类型选择主要指标
         if task_type == "detection":
-            current_metric = metrics.get("val_acc", 0.0)
-        elif task_type == "classification":
-            current_metric = metrics.get("val_acc", 0.0)
+            current_metric = metrics.get("val_acc", 0.0)  # 检测任务暂时使用准确率
         else:
             current_metric = metrics.get("val_acc", 0.0)
 
@@ -286,25 +549,33 @@ class Trainer:
 
         if is_best:
             self.best_metric = current_metric
-            self.logger.info(f"新最佳模型! {task_type.upper()}: {current_metric:.4f}")
+            self.logger.info(f"新最佳模型! Val Acc: {current_metric:.4f}")
 
         # 保存逻辑
-        # 注意：这里应该调用CheckpointManager
-        # 为了保持模块独立，这里只记录日志
         checkpoint_path = Path(self.config.get("checkpoint_dir", "data/checkpoints"))
         checkpoint_path.mkdir(parents=True, exist_ok=True)
 
         checkpoint_file = checkpoint_path / f"epoch_{epoch}.pt"
+        best_file = checkpoint_path / "best_model.pt"
 
-        # 模拟保存checkpoint
-        torch.save({
+        # 准备保存的内容
+        checkpoint = {
             "epoch": epoch,
-            "model_state_dict": {},  # 实际使用时这里应该有模型状态
-            "optimizer_state_dict": {},  # 实际使用时这里应该有优化器状态
+            "model_state_dict": self.model.state_dict() if self.model is not None else {},
+            "optimizer_state_dict": self.optimizer.state_dict() if self.optimizer is not None else {},
+            "scheduler_state_dict": self.scheduler.state_dict() if self.scheduler is not None else None,
             "metrics": metrics,
-            "is_best": is_best,
+            "best_metric": self.best_metric,
+            "config": self.config,
             "timestamp": datetime.utcnow().isoformat()
-        }, checkpoint_file)
+        }
+
+        # 保存当前epoch的checkpoint
+        torch.save(checkpoint, checkpoint_file)
+
+        # 如果是最佳模型，额外保存
+        if is_best:
+            torch.save(checkpoint, best_file)
 
         # 添加日志
         training_logger.add_log(
