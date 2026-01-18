@@ -33,7 +33,11 @@ from app.schemas.model import (
     ModelArchitectureResponse,
     ModelArchitectureList,
     GeneratedCodeResponse,
-    GeneratedCodeList
+    GeneratedCodeList,
+    PresetModelResponse,
+    PresetModelListItem,
+    PresetModelList,
+    CreateFromPresetRequest
 )
 from app.dependencies import get_db
 
@@ -129,7 +133,10 @@ async def models_root():
             "analyze-and-infer": "POST /api/v1/models/analyze-and-infer - 组合分析",
             "generate": "POST /api/v1/models/generate - 生成PyTorch代码",
             "validate-code": "POST /api/v1/models/validate-code - 验证生成的代码",
-            "templates": "GET /api/v1/models/templates - 获取可用模板列表"
+            "templates": "GET /api/v1/models/templates - 获取可用模板列表",
+            "presets": "GET /api/v1/models/presets - 获取预设模型列表",
+            "presets/{id}": "GET /api/v1/models/presets/{id} - 获取预设模型详情",
+            "presets/{id}/create": "POST /api/v1/models/presets/{id}/create - 从预设创建架构"
         }
     }
 
@@ -780,4 +787,233 @@ async def delete_architecture(
         raise HTTPException(
             status_code=500,
             detail=f"删除架构失败: {str(e)}"
+        )
+
+
+# ==============================
+# 预设模型管理端点
+# ==============================
+
+@router.get("/presets", response_model=PresetModelList)
+async def get_preset_models(
+    category: Optional[str] = Query(None, description="分类筛选：cnn, rnn, transformer, classification, detection"),
+    difficulty: Optional[str] = Query(None, description="难度筛选：beginner, intermediate, advanced"),
+    skip: int = Query(0, ge=0, description="跳过数量"),
+    limit: int = Query(100, ge=1, le=100, description="返回数量"),
+    db: Session = Depends(get_db)
+):
+    """
+    获取预设模型列表
+
+    支持按分类和难度筛选预设模型。
+    """
+    try:
+        from app.models.model import PresetModel
+
+        # 构建查询
+        query = db.query(PresetModel).filter(PresetModel.is_active == True)
+
+        if category:
+            query = query.filter(PresetModel.category == category)
+        if difficulty:
+            query = query.filter(PresetModel.difficulty == difficulty)
+
+        # 获取总数
+        total = query.count()
+
+        # 分页查询
+        presets = query.order_by(PresetModel.id).offset(skip).limit(limit).all()
+
+        # 转换为响应格式
+        items = []
+        for preset in presets:
+            items.append({
+                "id": preset.id,
+                "name": preset.name,
+                "description": preset.description or "",
+                "category": preset.category,
+                "difficulty": preset.difficulty,
+                "tags": preset.tags or [],
+                "node_count": preset.node_count,
+                "connection_count": preset.connection_count
+            })
+
+        return PresetModelList(
+            presets=items,
+            total=total
+        )
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"获取预设模型列表失败: {str(e)}"
+        )
+
+
+@router.get("/presets/{preset_id}", response_model=PresetModelResponse)
+async def get_preset_model(
+    preset_id: int,
+    db: Session = Depends(get_db)
+):
+    """
+    获取预设模型详情
+
+    返回预设模型的完整数据，包括架构数据。
+    """
+    try:
+        from app.models.model import PresetModel
+
+        preset = db.query(PresetModel).filter(
+            PresetModel.id == preset_id,
+            PresetModel.is_active == True
+        ).first()
+
+        if not preset:
+            raise HTTPException(404, "预设模型不存在")
+
+        return PresetModelResponse(
+            id=preset.id,
+            name=preset.name,
+            description=preset.description,
+            category=preset.category,
+            difficulty=preset.difficulty,
+            tags=preset.tags or [],
+            architecture_data=preset.architecture_data,
+            thumbnail=preset.thumbnail,
+            extra_metadata=preset.extra_metadata,
+            is_active=preset.is_active,
+            node_count=preset.node_count,
+            connection_count=preset.connection_count,
+            created_at=preset.created_at,
+            updated_at=preset.updated_at
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"获取预设模型失败: {str(e)}"
+        )
+
+
+@router.post("/presets/{preset_id}/create")
+async def create_from_preset(
+    preset_id: int,
+    request: CreateFromPresetRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    从预设模型创建新架构
+
+    使用预设模型的架构数据创建一个新的用户架构。
+    新架构会保存到用户的架构列表中，可以自由修改。
+    如果名称已存在，会自动添加后缀（_copy, _copy2, ...）确保唯一性。
+    """
+    try:
+        from app.models.model import PresetModel
+        from app.models.model_architecture import ModelArchitecture
+        import json
+        from pathlib import Path
+
+        # 获取预设模型
+        preset = db.query(PresetModel).filter(
+            PresetModel.id == preset_id,
+            PresetModel.is_active == True
+        ).first()
+
+        if not preset:
+            raise HTTPException(404, "预设模型不存在")
+
+        # 获取架构数据
+        arch_data = preset.architecture_data
+        nodes = arch_data.get("nodes", [])
+        connections = arch_data.get("connections", [])
+
+        # 检查名称是否已存在，如果存在则生成唯一名称
+        final_name = request.name
+        counter = 1
+        base_name = request.name
+
+        while True:
+            existing = db.query(ModelArchitecture).filter(
+                ModelArchitecture.name == final_name,
+                ModelArchitecture.is_active == "active"
+            ).first()
+
+            if not existing:
+                break
+
+            # 生成新的名称
+            if counter == 1:
+                final_name = f"{base_name}_copy"
+            else:
+                final_name = f"{base_name}_copy{counter}"
+            counter += 1
+
+        # 生成唯一的文件名（使用时间戳 + 微秒确保唯一）
+        timestamp = datetime.now().strftime("%Y%m%d%H%M%S%f")
+        safe_name = "".join(c if c.isalnum() or c in ('_', '-') else '_' for c in final_name)
+        file_name = f"{safe_name}_{timestamp}.json"
+        file_path = Path("data/architectures") / file_name
+
+        # 确保目录存在
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # 保存架构文件
+        file_data = {
+            "name": final_name,
+            "description": request.description or f"基于预设模型「{preset.name}」创建",
+            "version": "v1.0",
+            "type": preset.category.capitalize(),
+            "nodes": nodes,
+            "connections": connections
+        }
+        with open(file_path, "w", encoding="utf-8") as f:
+            json.dump(file_data, f, ensure_ascii=False, indent=2)
+
+        # 直接创建数据库记录（不使用 create_architecture 服务）
+        new_architecture = ModelArchitecture(
+            name=final_name,
+            description=request.description or f"基于预设模型「{preset.name}」创建",
+            version="v1.0",
+            type=preset.category.capitalize(),
+            file_path=str(file_path),
+            file_name=file_name,
+            node_count=len(nodes),
+            connection_count=len(connections),
+            meta={
+                "nodes": nodes,
+                "connections": connections,
+                "created": datetime.now().isoformat(),
+                "preset_id": preset_id,
+                "preset_name": preset.name
+            },
+            created_by=None  # TODO: 从认证中获取用户ID
+        )
+        db.add(new_architecture)
+        db.commit()
+        db.refresh(new_architecture)
+
+        # 如果名称被修改，在消息中说明
+        message = f"架构「{new_architecture.name}」已创建"
+        if final_name != request.name:
+            message = f"架构「{request.name}」已存在，已创建为「{new_architecture.name}」"
+
+        return {
+            "message": message,
+            "id": new_architecture.id,
+            "name": new_architecture.name,
+            "filename": new_architecture.file_name,
+            "preset_id": preset_id,
+            "preset_name": preset.name
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"创建架构失败: {str(e)}"
         )

@@ -149,3 +149,76 @@ class CodeGenerationResponse(BaseModel):
     code_id: Optional[int] = None
     message: str
     warnings: List[str] = []
+
+
+# ==================== 预设模型相关模式 ====================
+
+class PresetModelBase(BaseModel):
+    """预设模型基础模式"""
+    name: str = Field(..., min_length=1, max_length=100, description="预设模型名称")
+    description: Optional[str] = Field(None, max_length=1000, description="预设模型描述")
+    category: str = Field(..., max_length=50, description="分类：cnn, rnn, transformer, classification, detection")
+    difficulty: str = Field(..., max_length=20, description="难度：beginner, intermediate, advanced")
+    tags: List[str] = Field(default_factory=list, description="标签列表")
+    architecture_data: Dict[str, Any] = Field(..., description="架构数据，包含nodes和connections")
+
+
+class PresetModelCreate(PresetModelBase):
+    """创建预设模型模式（管理员使用）"""
+    thumbnail: Optional[str] = Field(None, description="缩略图base64")
+    extra_metadata: Optional[Dict[str, Any]] = Field(None, description="额外元数据")
+
+
+class PresetModelUpdate(BaseModel):
+    """更新预设模型模式"""
+    name: Optional[str] = Field(None, min_length=1, max_length=100, description="预设模型名称")
+    description: Optional[str] = Field(None, max_length=1000, description="预设模型描述")
+    category: Optional[str] = Field(None, max_length=50, description="分类")
+    difficulty: Optional[str] = Field(None, max_length=20, description="难度")
+    tags: Optional[List[str]] = Field(None, description="标签列表")
+    thumbnail: Optional[str] = Field(None, description="缩略图base64")
+    architecture_data: Optional[Dict[str, Any]] = Field(None, description="架构数据")
+    extra_metadata: Optional[Dict[str, Any]] = Field(None, description="额外元数据")
+    is_active: Optional[bool] = Field(None, description="是否激活")
+
+
+class PresetModelResponse(PresetModelBase):
+    """预设模型响应模式"""
+    id: int
+    thumbnail: Optional[str] = None
+    extra_metadata: Optional[Dict[str, Any]] = None
+    is_active: bool
+    node_count: int
+    connection_count: int
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class PresetModelListItem(BaseModel):
+    """预设模型列表项模式（简化版）"""
+    id: int
+    name: str
+    description: str
+    category: str
+    difficulty: str
+    tags: List[str]
+    node_count: int
+    connection_count: int
+
+    class Config:
+        from_attributes = True
+
+
+class PresetModelList(BaseModel):
+    """预设模型列表响应模式"""
+    presets: List[PresetModelListItem]
+    total: int
+
+
+class CreateFromPresetRequest(BaseModel):
+    """从预设模型创建架构请求模式"""
+    name: str = Field(..., min_length=1, max_length=100, description="新架构名称")
+    description: Optional[str] = Field(None, max_length=1000, description="新架构描述")

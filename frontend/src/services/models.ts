@@ -86,6 +86,35 @@ interface AnalyzeAndInferResult {
 }
 
 // ==============================
+// 预设模型相关类型
+// ==============================
+
+interface PresetModel {
+  id: number;
+  name: string;
+  description: string;
+  category: string;
+  difficulty: 'beginner' | 'intermediate' | 'advanced';
+  tags: string[];
+  node_count: number;
+  connection_count: number;
+}
+
+interface PresetModelDetail extends PresetModel {
+  architecture_data: {
+    nodes: ModelNode[];
+    connections: ModelConnection[];
+  };
+  thumbnail?: string;
+  metadata?: Record<string, any>;
+}
+
+interface PresetModelListResult {
+  presets: PresetModel[];
+  total: number;
+}
+
+// ==============================
 // API方法
 // ==============================
 
@@ -146,6 +175,48 @@ export async function listTemplates(): Promise<any> {
 }
 
 // ==============================
+// 预设模型API方法
+// ==============================
+
+/**
+ * 获取预设模型列表
+ */
+export async function getPresetModels(params?: {
+  category?: string;
+  difficulty?: string;
+}): Promise<PresetModelListResult> {
+  return await apiClient.get<PresetModelListResult>('/models/presets', { params });
+}
+
+/**
+ * 获取预设模型详情
+ */
+export async function getPresetModel(id: number): Promise<PresetModelDetail> {
+  return await apiClient.get<PresetModelDetail>(`/models/presets/${id}`);
+}
+
+/**
+ * 从预设模型创建新架构
+ */
+export async function createFromPreset(
+  presetId: number,
+  name: string,
+  description?: string
+): Promise<{
+  message: string;
+  id: number;
+  name: string;
+  filename: string;
+  preset_id: number;
+  preset_name: string;
+}> {
+  return await apiClient.post(`/models/presets/${presetId}/create`, {
+    name,
+    description
+  });
+}
+
+// ==============================
 // 导出
 // ==============================
 
@@ -156,5 +227,8 @@ export default {
   analyzeAndInfer,
   generatePyTorchCode,
   validateGeneratedCode,
-  listTemplates
+  listTemplates,
+  getPresetModels,
+  getPresetModel,
+  createFromPreset
 };

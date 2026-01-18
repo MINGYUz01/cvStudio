@@ -12,6 +12,7 @@ import modelsAPI from '../src/services/models';
 import { weightService, TaskType } from '../src/services/weights';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from 'recharts';
 import CodePreviewModal from './CodePreviewModal';
+import InputModal from './InputModal';
 
 // 统计图表颜色
 const CHART_COLORS = ['#22d3ee', '#a855f7', '#f43f5e', '#fbbf24', '#34d399', '#60a5fa'];
@@ -79,16 +80,20 @@ interface BlockTemplate {
 interface VisualNode extends ModelNode { data: Record<string, any>; }
 interface Connection { id: string; source: string; target: string; }
 interface ModelData {
-  id: string;          // 前端使用的ID（格式：server_{db_id} 或 local_*）
-  arch_id?: number;    // 数据库中的架构ID
+  id: string;              // 前端使用的ID（格式：server_{db_id} 或 local_*）
+  arch_id?: number;        // 数据库中的架构ID
   name: string;
   version: string;
   status: string;
   type: string;
   updated: string;
+  description?: string;    // 模型描述
+  created?: string;        // 创建时间
+  node_count?: number;     // 节点数量
+  connection_count?: number; // 连接数量
   nodes: VisualNode[];
   connections: Connection[];
-  filename?: string;   // 服务器文件名（保留用于兼容）
+  filename?: string;       // 服务器文件名（保留用于兼容）
 }
 
 
@@ -237,12 +242,67 @@ const ModelBuilder: React.FC = () => {
   const [models, setModels] = useState<ModelData[]>([]);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
 
+  // 预设模型状态
+  const [presetModels, setPresetModels] = useState<any[]>([]);
+  const [isLoadingPresets, setIsLoadingPresets] = useState(false);
+  const [showPresets, setShowPresets] = useState(true);
+  const [selectedCategory, setSelectedCategory] = useState<string>('all');
+  const [selectedDifficulty, setSelectedDifficulty] = useState<string>('all');
+  // 预设模型弹窗状态
+  const [showPresetModal, setShowPresetModal] = useState(false);
+  const [selectedPreset, setSelectedPreset] = useState<{id: number, name: string, description?: string} | null>(null);
+  const [isCreatingFromPreset, setIsCreatingFromPreset] = useState(false);
+
   // Weights State
   const [weights, setWeights] = useState<WeightCheckpoint[]>([]);
   const [isLoadingWeights, setIsLoadingWeights] = useState(false);
 
   // Generated Model Files State
   const [generatedFiles, setGeneratedFiles] = useState<Array<{id: number, filename: string, name: string, size: number, created: string}>>([]);
+
+  // 辅助函数：日期格式化 - 显示相对时间
+  const formatDate = (dateStr: string): string => {
+    if (!dateStr) return '-';
+    const date = new Date(dateStr);
+    const now = new Date();
+    const diffDays = Math.floor((now.getTime() - date.getTime()) / (1000 * 60 * 60 * 24));
+
+    if (diffDays === 0) return '今天';
+    if (diffDays === 1) return '昨天';
+    if (diffDays < 7) return `${diffDays}天前`;
+    if (diffDays < 30) return `${Math.floor(diffDays / 7)}周前`;
+    return `${date.getMonth() + 1}/${date.getDate()}`;
+  };
+
+  // 辅助函数：根据模型生成智能标签
+  const getModelTags = (model: ModelData): JSX.Element[] => {
+    const tags: JSX.Element[] = [];
+
+    // 类型标签
+    const typeLower = model.type.toLowerCase();
+    if (typeLower.includes('cnn') || typeLower.includes('conv')) {
+      tags.push(<span key="cnn" className="px-2 py-0.5 rounded text-[10px] font-medium bg-blue-900/30 text-blue-400 border border-blue-500/20">CNN</span>);
+    }
+    if (typeLower.includes('rnn') || typeLower.includes('lstm') || typeLower.includes('gru')) {
+      tags.push(<span key="rnn" className="px-2 py-0.5 rounded text-[10px] font-medium bg-amber-900/30 text-amber-400 border border-amber-500/20">RNN</span>);
+    }
+    if (typeLower.includes('transformer') || typeLower.includes('attention')) {
+      tags.push(<span key="trans" className="px-2 py-0.5 rounded text-[10px] font-medium bg-emerald-900/30 text-emerald-400 border border-emerald-500/20">Transformer</span>);
+    }
+
+    // 复杂度标签
+    if (model.node_count) {
+      if (model.node_count >= 50) {
+        tags.push(<span key="complex" className="px-2 py-0.5 rounded text-[10px] font-medium bg-rose-900/30 text-rose-400 border border-rose-500/20">复杂</span>);
+      } else if (model.node_count >= 20) {
+        tags.push(<span key="medium" className="px-2 py-0.5 rounded text-[10px] font-medium bg-yellow-900/30 text-yellow-400 border border-yellow-500/20">中等</span>);
+      } else {
+        tags.push(<span key="simple" className="px-2 py-0.5 rounded text-[10px] font-medium bg-green-900/30 text-green-400 border border-green-500/20">简单</span>);
+      }
+    }
+
+    return tags;
+  };
 
   // 从服务器加载架构列表
   const loadServerArchitectures = async () => {
@@ -259,14 +319,18 @@ const ModelBuilder: React.FC = () => {
         // 将服务器架构转换为 ModelData 格式
         const serverModels: ModelData[] = (data.architectures || []).map((arch: any) => ({
           id: `server_${arch.id}`,
-          arch_id: arch.id,          // 数据库ID
+          arch_id: arch.id,              // 数据库ID
           name: arch.name,
           version: arch.version,
           status: 'Ready',
           type: arch.type,
+          description: arch.description || '',  // 模型描述
+          created: arch.created,                // 创建时间
+          updated: arch.updated,
+          node_count: arch.node_count || 0,     // 节点数量
+          connection_count: arch.connection_count || 0, // 连接数量
           nodes: [], // 节点数据按需加载
           connections: [], // 连接数据按需加载
-          updated: new Date(arch.updated).toLocaleDateString(),
           filename: arch.file_name,  // 文件名（保留用于兼容）
         }));
         setModels(serverModels);
@@ -278,6 +342,124 @@ const ModelBuilder: React.FC = () => {
     } finally {
       setIsLoadingModels(false);
     }
+  };
+
+  // 加载预设模型列表
+  const loadPresetModels = async () => {
+    setIsLoadingPresets(true);
+    try {
+      const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1'}/models/presets`, {
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('access_token')}`,
+        },
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setPresetModels(data.presets || []);
+      } else {
+        setPresetModels([]);
+      }
+    } catch (error) {
+      console.error('加载预设模型失败:', error);
+      setPresetModels([]);
+    } finally {
+      setIsLoadingPresets(false);
+    }
+  };
+
+  // 从预设模型创建架构 - 打开弹窗
+  const handleCreateFromPreset = (presetId: number, presetName: string, presetDescription?: string) => {
+    setSelectedPreset({ id: presetId, name: presetName, description: presetDescription });
+    setShowPresetModal(true);
+  };
+
+  // 确认从预设模型创建架构
+  const confirmCreateFromPreset = async (name: string, description: string) => {
+    if (!selectedPreset) return;
+
+    setIsCreatingFromPreset(true);
+    try {
+      const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1'}/models/presets/${selectedPreset.id}/create`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('access_token')}`,
+        },
+        body: JSON.stringify({ name, description }),
+      });
+
+      if (response.ok) {
+        const result = await response.json();
+        // 关闭弹窗
+        setShowPresetModal(false);
+        setSelectedPreset(null);
+        // 显示成功通知
+        showNotification(`架构「${name}」已创建！`, 'success');
+        // 重新加载架构列表
+        loadServerArchitectures();
+      } else {
+        const error = await response.json();
+        const errorMsg = error.detail || error.message || '未知错误';
+        showNotification(`创建失败: ${errorMsg}`, 'error');
+      }
+    } catch (error) {
+      console.error('创建架构失败:', error);
+      showNotification('创建失败，请稍后重试', 'error');
+    } finally {
+      setIsCreatingFromPreset(false);
+    }
+  };
+
+  // 关闭预设模型弹窗
+  const closePresetModal = () => {
+    setShowPresetModal(false);
+    setSelectedPreset(null);
+  };
+
+  // 获取难度标签样式
+  const getDifficultyBadge = (difficulty: string) => {
+    switch (difficulty) {
+      case 'beginner':
+        return 'px-2 py-0.5 rounded text-[10px] font-medium bg-green-900/30 text-green-400 border border-green-500/20';
+      case 'intermediate':
+        return 'px-2 py-0.5 rounded text-[10px] font-medium bg-yellow-900/30 text-yellow-400 border border-yellow-500/20';
+      case 'advanced':
+        return 'px-2 py-0.5 rounded text-[10px] font-medium bg-rose-900/30 text-rose-400 border border-rose-500/20';
+      default:
+        return 'px-2 py-0.5 rounded text-[10px] font-medium bg-slate-800 text-slate-400';
+    }
+  };
+
+  // 获取难度文本
+  const getDifficultyText = (difficulty: string) => {
+    switch (difficulty) {
+      case 'beginner': return '入门';
+      case 'intermediate': return '中级';
+      case 'advanced': return '高级';
+      default: return difficulty;
+    }
+  };
+
+  // 获取分类图标
+  const getCategoryIcon = (category: string) => {
+    switch (category) {
+      case 'cnn': return '🔷';
+      case 'rnn': return '🔄';
+      case 'transformer': return '⚡';
+      case 'classification': return '🏷️';
+      case 'detection': return '🎯';
+      default: return '📦';
+    }
+  };
+
+  // 筛选预设模型
+  const getFilteredPresets = () => {
+    return presetModels.filter(preset => {
+      if (selectedCategory !== 'all' && preset.category !== selectedCategory) return false;
+      if (selectedDifficulty !== 'all' && preset.difficulty !== selectedDifficulty) return false;
+      return true;
+    });
   };
 
   // 从服务器加载权重列表
@@ -321,9 +503,10 @@ const ModelBuilder: React.FC = () => {
     }
   };
 
-  // 组件挂载时从服务器加载架构列表
+  // 组件挂载时从服务器加载架构列表和预设模型
   useEffect(() => {
     loadServerArchitectures();
+    loadPresetModels();
   }, []);
   
   // Builder State
@@ -543,8 +726,6 @@ const ModelBuilder: React.FC = () => {
       }
     } catch (error: any) {
       console.error('代码生成失败:', error);
-      console.error('error.detail:', error.detail);
-      console.error('error.message:', error.message);
 
       // 解析详细的错误信息
       let detailMsg = '';
@@ -563,8 +744,6 @@ const ModelBuilder: React.FC = () => {
       } else if (error.message) {
         detailMsg = error.message;
       }
-
-      console.log('解析后的错误信息:', { detailMsg, errorDetails, warnings });
 
       // 显示详细错误弹窗
       setErrorDialog({
@@ -1551,43 +1730,193 @@ const ModelBuilder: React.FC = () => {
                             </button>
                         </div>
                     </div>
-                    
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-                        {models.map(model => (
-                        <div key={model.id} onClick={() => handleEditModel(model)} className="glass-panel p-5 rounded-xl border border-slate-800 hover:border-cyan-500/50 hover:bg-slate-900/80 transition-all group flex flex-col cursor-pointer relative overflow-hidden">
-                            <button
-                                onClick={(e) => handleDeleteModel(model.id, model.arch_id, e)}
-                                className="absolute top-4 right-4 p-2 text-slate-500 hover:text-rose-400 bg-slate-900/50 hover:bg-slate-900 rounded-full transition-all z-20 opacity-0 group-hover:opacity-100"
-                                title="删除模型"
-                            >
-                                <Trash2 size={16} />
-                            </button>
 
-                            <div className="flex justify-between items-start mb-4">
-                                <div className="flex items-center space-x-3">
-                                    <div className={`p-3 rounded-lg border border-slate-700/50 group-hover:scale-110 transition-transform ${model.status === 'Ready' ? 'bg-cyan-900/20 text-cyan-400' : model.status === 'Training' ? 'bg-emerald-900/20 text-emerald-400 animate-pulse' : 'bg-slate-800 text-slate-500'}`}>
-                                        <GitBranch size={24} />
+                    {/* 预设模型区域 */}
+                    {presetModels.length > 0 && (
+                        <div className="mb-8">
+                            {/* 预设模型标题栏 */}
+                            <div className="flex items-center justify-between mb-4">
+                                <div className="flex items-center gap-3">
+                                    <button
+                                        onClick={() => setShowPresets(!showPresets)}
+                                        className="flex items-center gap-2 text-slate-300 hover:text-white transition-colors"
+                                    >
+                                        <Package size={18} className={showPresets ? "text-cyan-400" : ""} />
+                                        <span className="font-medium">预设模型</span>
+                                        <span className="px-2 py-0.5 rounded-full bg-cyan-900/30 text-cyan-400 text-xs">
+                                            {presetModels.length}
+                                        </span>
+                                    </button>
+                                    {/* 分类筛选 */}
+                                    <div className="flex gap-2 ml-4">
+                                        {['all', 'cnn', 'rnn', 'transformer', 'classification', 'detection'].map(cat => (
+                                            <button
+                                                key={cat}
+                                                onClick={() => setSelectedCategory(cat)}
+                                                className={`px-3 py-1 rounded-lg text-xs font-medium transition-all ${
+                                                    selectedCategory === cat
+                                                        ? 'bg-cyan-600 text-white'
+                                                        : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+                                                }`}
+                                            >
+                                                {cat === 'all' ? '全部' :
+                                                 cat === 'cnn' ? 'CNN' :
+                                                 cat === 'rnn' ? 'RNN' :
+                                                 cat === 'transformer' ? 'Transformer' :
+                                                 cat === 'classification' ? '分类' :
+                                                 cat === 'detection' ? '检测' : cat}
+                                            </button>
+                                        ))}
                                     </div>
-                                    <div className={`px-2 py-1 rounded-md text-[10px] font-bold uppercase tracking-wider border ${
-                                        model.status === 'Ready' ? 'bg-cyan-950/40 border-cyan-500/30 text-cyan-400' : 
-                                        model.status === 'Training' ? 'bg-emerald-950/40 border-emerald-500/30 text-emerald-400 animate-pulse' : 
-                                        'bg-slate-800 border-slate-700 text-slate-400'
-                                    }`}>
-                                        {model.status}
+                                    {/* 难度筛选 */}
+                                    <div className="flex gap-2 ml-2">
+                                        {['all', 'beginner', 'intermediate', 'advanced'].map(diff => (
+                                            <button
+                                                key={diff}
+                                                onClick={() => setSelectedDifficulty(diff)}
+                                                className={`px-3 py-1 rounded-lg text-xs font-medium transition-all ${
+                                                    selectedDifficulty === diff
+                                                        ? 'bg-purple-600 text-white'
+                                                        : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+                                                }`}
+                                            >
+                                                {diff === 'all' ? '全部难度' :
+                                                 diff === 'beginner' ? '入门' :
+                                                 diff === 'intermediate' ? '中级' :
+                                                 diff === 'advanced' ? '高级' : diff}
+                                            </button>
+                                        ))}
                                     </div>
                                 </div>
                             </div>
 
-                            <div className="flex-1">
-                                <h3 className="text-lg font-bold text-white mb-1 group-hover:text-cyan-400 transition-colors line-clamp-1" title={model.name}>{model.name}</h3>
-                                <div className="flex items-center space-x-2 text-xs text-slate-500 mb-4"><span className="bg-slate-900 px-1.5 py-0.5 rounded border border-slate-800">{model.version}</span><span>• {model.type}</span></div>
-                                <div className="text-[10px] text-slate-600">{model.nodes?.length || 0} Layers • {model.connections?.length || 0} Connections</div>
+                            {/* 预设模型卡片列表 */}
+                            {showPresets && (
+                                <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4 mb-6">
+                                    {getFilteredPresets().map(preset => (
+                                        <div
+                                            key={preset.id}
+                                            onClick={() => handleCreateFromPreset(preset.id, preset.name, preset.description)}
+                                            className="glass-panel p-4 rounded-lg border border-slate-800 hover:border-cyan-500/50 hover:bg-slate-800/80 transition-all cursor-pointer group"
+                                        >
+                                            {/* 图标和难度 */}
+                                            <div className="flex items-start justify-between mb-3">
+                                                <span className="text-2xl">{getCategoryIcon(preset.category)}</span>
+                                                <span className={getDifficultyBadge(preset.difficulty)}>
+                                                    {getDifficultyText(preset.difficulty)}
+                                                </span>
+                                            </div>
+                                            {/* 名称 */}
+                                            <h4 className="text-sm font-bold text-white mb-1 group-hover:text-cyan-400 transition-colors line-clamp-1" title={preset.name}>
+                                                {preset.name}
+                                            </h4>
+                                            {/* 描述 */}
+                                            <p className="text-xs text-slate-500 line-clamp-2 leading-relaxed mb-3" title={preset.description}>
+                                                {preset.description}
+                                            </p>
+                                            {/* 标签 */}
+                                            <div className="flex flex-wrap gap-1">
+                                                {preset.tags.slice(0, 2).map(tag => (
+                                                    <span key={tag} className="px-2 py-0.5 rounded text-[10px] font-medium bg-slate-800 text-slate-400 border border-slate-700">
+                                                        {tag}
+                                                    </span>
+                                                ))}
+                                                {preset.tags.length > 2 && (
+                                                    <span className="px-2 py-0.5 rounded text-[10px] font-medium bg-slate-800 text-slate-500">
+                                                        +{preset.tags.length - 2}
+                                                    </span>
+                                                )}
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    )}
+
+                    {/* 分隔线 */}
+                    {presetModels.length > 0 && showPresets && (
+                        <div className="border-t border-slate-800 my-6"></div>
+                    )}
+
+                    {/* 我的架构标题 */}
+                    <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
+                        <GitBranch size={18} className="text-cyan-400" />
+                        我的架构
+                        <span className="px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 text-xs">
+                            {models.length}
+                        </span>
+                    </h3>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                        {models.map(model => (
+                        <div
+                            key={model.id}
+                            onClick={() => handleEditModel(model)}
+                            className="glass-panel p-0 rounded-xl border border-slate-800 hover:border-cyan-500/50 hover:bg-slate-900/80 transition-all group flex flex-col cursor-pointer relative overflow-hidden min-h-[220px]"
+                        >
+                            {/* 删除按钮 */}
+                            <button
+                                onClick={(e) => handleDeleteModel(model.id, model.arch_id, e)}
+                                className="absolute top-3 right-3 p-2 text-slate-500 hover:text-rose-400 bg-slate-900/70 hover:bg-rose-900/30 rounded-lg transition-all z-20 opacity-0 group-hover:opacity-100"
+                                title="删除模型"
+                            >
+                                <Trash2 size={14} />
+                            </button>
+
+                            {/* 主体内容区 */}
+                            <div className="flex-1 p-5 flex flex-col">
+                                {/* 顶部：图标 + 名称 + 描述 */}
+                                <div className="flex items-start gap-4 mb-3">
+                                    {/* 图标容器 */}
+                                    <div className="p-3 rounded-xl border border-slate-700/50 group-hover:scale-110 transition-transform shrink-0 bg-gradient-to-br from-cyan-900/30 to-blue-900/30 text-cyan-400">
+                                        <GitBranch size={24} />
+                                    </div>
+
+                                    {/* 名称和描述 */}
+                                    <div className="flex-1 min-w-0">
+                                        <h3 className="text-base font-bold text-white mb-1 group-hover:text-cyan-400 transition-colors line-clamp-1" title={model.name}>
+                                            {model.name}
+                                        </h3>
+                                        <p className="text-xs text-slate-500 line-clamp-2 leading-relaxed" title={model.description || '暂无描述'}>
+                                            {model.description || '暂无描述信息'}
+                                        </p>
+                                    </div>
+                                </div>
+
+                                {/* 标签区 */}
+                                <div className="flex flex-wrap gap-2 mb-4">
+                                    <span className="px-2 py-0.5 rounded text-[10px] font-medium bg-purple-900/30 text-purple-400 border border-purple-500/20">
+                                        {model.type}
+                                    </span>
+                                    {getModelTags(model)}
+                                </div>
+
+                                {/* 底部统计信息 */}
+                                <div className="mt-auto pt-3 border-t border-slate-800/50">
+                                    <div className="grid grid-cols-4 gap-2 text-center">
+                                        <div className="flex flex-col">
+                                            <span className="text-[10px] text-slate-600">层数</span>
+                                            <span className="text-sm font-semibold text-cyan-400">{model.node_count || model.nodes?.length || 0}</span>
+                                        </div>
+                                        <div className="flex flex-col">
+                                            <span className="text-[10px] text-slate-600">连接</span>
+                                            <span className="text-sm font-semibold text-purple-400">{model.connection_count || model.connections?.length || 0}</span>
+                                        </div>
+                                        <div className="flex flex-col">
+                                            <span className="text-[10px] text-slate-600">版本</span>
+                                            <span className="text-sm font-semibold text-slate-300">{model.version}</span>
+                                        </div>
+                                        <div className="flex flex-col">
+                                            <span className="text-[10px] text-slate-600">更新</span>
+                                            <span className="text-xs text-slate-400 truncate" title={model.updated}>{formatDate(model.updated)}</span>
+                                        </div>
+                                    </div>
+                                </div>
                             </div>
 
-                            <div className="pt-4 border-t border-slate-800/50 flex items-center justify-between">
-                                <span className="text-[10px] text-slate-600">Updated: {model.updated}</span>
-                            </div>
-                            <div className="absolute bottom-0 left-0 w-full h-1 bg-gradient-to-r from-cyan-500 to-purple-600 transform scale-x-0 group-hover:scale-x-100 transition-transform origin-left"></div>
+                            {/* 底部渐变条 */}
+                            <div className="absolute bottom-0 left-0 w-full h-0.5 bg-gradient-to-r from-cyan-500 via-purple-500 to-pink-500 transform scale-x-0 group-hover:scale-x-100 transition-transform origin-left"></div>
                         </div>
                         ))}
                         <div onClick={handleCreateNew} className="p-5 rounded-xl border-2 border-dashed border-slate-800 hover:border-cyan-500/50 hover:bg-slate-900/40 cursor-pointer transition-all flex flex-col items-center justify-center text-slate-500 hover:text-cyan-400 group min-h-[200px]">
@@ -2099,6 +2428,18 @@ const ModelBuilder: React.FC = () => {
           onSave={codePreviewSource === 'builder' ? handleSaveToLibrary : undefined}
           onDelete={codePreviewSource === 'library' ? handleDeleteCurrentPreview : undefined}
           showNotification={showNotification}
+        />
+
+        {/* Preset Model Input Modal */}
+        <InputModal
+          show={showPresetModal}
+          title="从预设模型创建架构"
+          presetName={selectedPreset?.name || ''}
+          presetDescription={selectedPreset?.description}
+          placeholder="请输入新架构的名称"
+          onConfirm={confirmCreateFromPreset}
+          onClose={closePresetModal}
+          loading={isCreatingFromPreset}
         />
 
         {/* Weight Upload Dialog */}
