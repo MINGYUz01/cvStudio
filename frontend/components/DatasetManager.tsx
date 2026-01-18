@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Folder,
   FolderOpen,
@@ -31,10 +31,11 @@ import {
 import { DatasetItem } from '../types';
 import { useDataset } from '../src/hooks/useDataset';
 import { adaptDatasetList, DatasetFormatStatus } from '../src/services/datasetAdapter';
-import { datasetService } from '../src/services/datasets';
+import { datasetService, ImageInfo } from '../src/services/datasets';
 import { apiClient } from '../src/services/api';
 import DatasetStatusLegend from './DatasetStatusLegend';
 import AnnotationOverlay from './AnnotationOverlay';
+import PaginationControls, { PageSizeOption } from './PaginationControls';
 
 // --- Import Dataset Dialog Component ---
 interface ImportDatasetDialogProps {
@@ -692,7 +693,7 @@ const UnknownFormatView: React.FC<UnknownFormatViewProps> = ({ datasetId, datase
 
 // --- Modern Lightbox Component ---
 interface LightboxProps {
-  src: string | { url: string; index: number };
+  src: string | { url: string; index: number; path?: string };
   onClose: () => void;
   datasetId: string;
   datasets: any[];
@@ -711,6 +712,7 @@ const Lightbox: React.FC<LightboxProps> = ({ src, onClose, datasetId, datasets }
   // 获取图片URL和索引
   const imgUrl = typeof src === 'string' ? src : src.url;
   const imgIndex = typeof src === 'string' ? 0 : src.index;
+  const imagePath = typeof src === 'string' ? undefined : src.path;
 
   // 加载标注数据
   useEffect(() => {
@@ -724,9 +726,13 @@ const Lightbox: React.FC<LightboxProps> = ({ src, onClose, datasetId, datasets }
       if (!isDetection) return;
 
       try {
-        // 获取图片的相对路径
-        const imagePaths = currentDataset.meta?.image_paths || [];
-        const relativePath = imagePaths[imgIndex];
+        let relativePath = imagePath;
+
+        // 如果没有传入路径，尝试从 image_paths 获取
+        if (!relativePath) {
+          const imagePaths = currentDataset.meta?.image_paths || [];
+          relativePath = imagePaths[imgIndex];
+        }
 
         if (relativePath) {
           const result = await datasetService.getImageAnnotations(
@@ -741,7 +747,7 @@ const Lightbox: React.FC<LightboxProps> = ({ src, onClose, datasetId, datasets }
       }
     };
     loadAnnotations();
-  }, [datasetId, imgIndex, datasets]);
+  }, [datasetId, imagePath, imgIndex, datasets]);
 
   const handleWheel = (e: React.WheelEvent) => {
     e.stopPropagation();
@@ -923,16 +929,33 @@ const DatasetManager: React.FC = () => {
 
   const [selectedDsId, setSelectedDsId] = useState<string>('');
   const [lightboxImg, setLightboxImg] = useState<string | { url: string; index: number } | null>(null);
-  const [imageUrls, setImageUrls] = useState<string[]>([]);
 
   // 类别筛选状态
   const [selectedClass, setSelectedClass] = useState<string | null>(null);
   const [classList, setClassList] = useState<string[]>([]);
-  const [classImages, setClassImages] = useState<string[]>([]);
 
   // 标注数据缓存和显示状态
   const [annotationsCache, setAnnotationsCache] = useState<Map<string, any[]>>(new Map());
   const [showAnnotations, setShowAnnotations] = useState(true);
+
+  // 分页状态
+  interface PaginationState {
+    currentPage: number;
+    pageSize: PageSizeOption;
+    total: number;
+    totalPages: number;
+    currentImages: ImageInfo[];
+    isLoading: boolean;
+  }
+
+  const [pagination, setPagination] = useState<PaginationState>({
+    currentPage: 1,
+    pageSize: 24,
+    total: 0,
+    totalPages: 0,
+    currentImages: [],
+    isLoading: false,
+  });
 
   // 导入弹窗状态
   const [importDialogOpen, setImportDialogOpen] = useState(false);
@@ -953,40 +976,98 @@ const DatasetManager: React.FC = () => {
     }
   }, [filteredDatasets, selectedDsId]);
 
-  // 当选中的数据集改变时，获取图片URL列表
-  useEffect(() => {
-    if (selectedDsId && apiDatasets.length > 0) {
-      const selectedDataset = apiDatasets.find((ds: any) => ds.id === parseInt(selectedDsId));
-      if (selectedDataset) {
-        // 从元数据中获取图片路径，然后构建URL
-        // 添加缓存破坏参数，确保每次数据集变化时都重新加载图片
-        const imagePaths = selectedDataset.meta?.image_paths || [];
-        const cacheBuster = selectedDataset.updated_at || selectedDataset.created_at || Date.now();
-        const urls = imagePaths.map((_: string, index: number) =>
-          `${apiClient['baseURL']}/datasets/${selectedDataset.id}/image-file?index=${index}&_t=${cacheBuster}`
+  // 加载图片数据的函数（支持分页和类别筛选）
+  const loadDatasetImages = useCallback(async (page: number) => {
+    if (!selectedDsId) return;
+
+    setPagination(prev => ({ ...prev, isLoading: true }));
+
+    try {
+      const actualPageSize = pagination.pageSize === 'all' ? 10000 : pagination.pageSize;
+
+      let result: {
+        images: ImageInfo[];
+        total: number;
+        page: number;
+        totalPages: number;
+      };
+
+      if (selectedClass) {
+        // 类别筛选模式
+        const classResult = await datasetService.getImagesByClass(
+          parseInt(selectedDsId),
+          selectedClass,
+          page,
+          actualPageSize
         );
-        setImageUrls(urls);
+        result = {
+          images: classResult.images,
+          total: classResult.total,
+          page: classResult.page,
+          totalPages: classResult.totalPages
+        };
+      } else {
+        // 普通模式 - 使用分页API
+        const data = await datasetService.getImages(
+          parseInt(selectedDsId),
+          {
+            page,
+            page_size: actualPageSize,
+            sort_by: 'filename',
+            sort_order: 'asc'
+          }
+        );
+        result = {
+          images: data.images,
+          total: data.total,
+          page: data.page,
+          totalPages: data.total_pages
+        };
       }
+
+      setPagination(prev => ({
+        ...prev,
+        currentPage: result.page,
+        total: result.total,
+        totalPages: result.totalPages,
+        currentImages: result.images,
+        isLoading: false
+      }));
+
+      // 清空标注缓存
+      setAnnotationsCache(new Map());
+    } catch (err) {
+      console.error('加载图片失败:', err);
+      setPagination(prev => ({ ...prev, isLoading: false, currentImages: [] }));
     }
-  }, [selectedDsId, apiDatasets]);
+  }, [selectedDsId, pagination.pageSize, selectedClass]);
 
-  // Pagination State for Samples
-  const [visibleSamples, setVisibleSamples] = useState(24);
-  const [isLoadingMore, setIsLoadingMore] = useState(false);
-
-  // Reset pagination when dataset changes
+  // 当数据集切换时，重置分页状态并加载第一页
   useEffect(() => {
-    setVisibleSamples(24);
+    if (selectedDsId) {
+      setPagination(prev => ({
+        ...prev,
+        currentPage: 1,
+        currentImages: [],
+        total: 0,
+        totalPages: 0
+      }));
+      loadDatasetImages(1);
+    }
   }, [selectedDsId]);
 
-  const handleLoadMore = () => {
-    setIsLoadingMore(true);
-    // Simulate network delay
-    setTimeout(() => {
-      setVisibleSamples(prev => prev + 24);
-      setIsLoadingMore(false);
-    }, 500);
-  };
+  // 当类别筛选变化时，重置分页并加载第一页
+  useEffect(() => {
+    setPagination(prev => ({ ...prev, currentPage: 1 }));
+    loadDatasetImages(1);
+  }, [selectedClass]);
+
+  // 当每页数量变化时，重新加载第一页
+  useEffect(() => {
+    if (selectedDsId) {
+      loadDatasetImages(1);
+    }
+  }, [pagination.pageSize]);
 
   // 当选中的数据集改变时，加载类别列表（分类格式）
   useEffect(() => {
@@ -1000,47 +1081,41 @@ const DatasetManager: React.FC = () => {
         // 如果是分类格式，重置筛选状态
         if (selectedDataset.format.toLowerCase() === 'classification') {
           setSelectedClass(null);
-          setClassImages([]);
         }
 
-        // 清空标注缓存
-        setAnnotationsCache(new Map());
+        // 更新分页总数（用于类别筛选按钮显示）
+        setPagination(prev => ({ ...prev, total: selectedDataset.num_images || 0 }));
       }
     }
   }, [selectedDsId, apiDatasets]);
 
-  // 按类别加载图片
-  useEffect(() => {
-    if (selectedClass) {
-      const loadImagesByClass = async () => {
-        try {
-          const result = await datasetService.getImagesByClass(
-            parseInt(selectedDsId),
-            selectedClass,
-            1,
-            100
-          );
-          const cacheBuster = Date.now();
-          // 使用 relative_path 参数获取图片
-          const urls = result.images.map((img: any) =>
-            `${apiClient['baseURL']}/datasets/${selectedDsId}/image-file?relative_path=${encodeURIComponent(img.relative_path)}&_t=${cacheBuster}`
-          );
-          setClassImages(urls);
-        } catch (err) {
-          console.error('加载类别图片失败:', err);
-          setClassImages([]);
-        }
-      };
-      loadImagesByClass();
-    } else {
-      setClassImages([]);
+  // 页码变化处理
+  const handlePageChange = (page: number) => {
+    loadDatasetImages(page);
+    // 滚动到图片区域顶部
+    const imageSection = document.getElementById('image-gallery-section');
+    if (imageSection) {
+      imageSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
-  }, [selectedClass, selectedDsId]);
+  };
 
-  // 重置可见样本数当切换类别时
-  useEffect(() => {
-    setVisibleSamples(24);
-  }, [selectedClass]);
+  // 每页数量变化处理
+  const handlePageSizeChange = (size: PageSizeOption) => {
+    if (size === 'all') {
+      // 显示大数据量警告
+      const currentDataset = apiDatasets.find((ds: any) => ds.id === parseInt(selectedDsId));
+      const imageCount = currentDataset?.num_images || 0;
+
+      if (imageCount > 500) {
+        const confirmed = confirm(
+          `该数据集包含 ${imageCount.toLocaleString()} 张图片，加载全部可能会影响性能。是否继续？`
+        );
+        if (!confirmed) return;
+      }
+    }
+
+    setPagination(prev => ({ ...prev, pageSize: size, currentPage: 1 }));
+  };
 
   // 打开导入弹窗
   const handleOpenImportDialog = () => {
@@ -1552,7 +1627,7 @@ const DatasetManager: React.FC = () => {
                                        : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
                                    }`}
                                  >
-                                   全部 ({imageUrls.length})
+                                   全部 ({pagination.total})
                                  </button>
                                  {classList.map((cls) => {
                                    // 从meta中获取类别图片数量，支持新旧两种格式
@@ -1608,74 +1683,86 @@ const DatasetManager: React.FC = () => {
                          );
                        })()}
 
-                       <div className="grid grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-3 mb-6">
-                         {(selectedClass ? classImages : imageUrls).slice(0, visibleSamples).length > 0 ? (
-                           (selectedClass ? classImages : imageUrls).slice(0, visibleSamples).map((imgUrl, i) => (
-                             <div
-                               key={i}
-                               onClick={() => setLightboxImg({ url: imgUrl, index: i })}
-                               className="aspect-square bg-slate-800 rounded border border-slate-800 overflow-hidden relative group cursor-pointer hover:border-cyan-500 transition-all duration-200"
-                             >
-                               <img
-                                 src={imgUrl}
-                                 className="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity"
-                                 onError={(e) => {
-                                   (e.target as HTMLImageElement).src = `https://picsum.photos/600/600?random=${i}`;
-                                 }}
-                                 alt={`Sample ${i + 1}`}
-                               />
-                               {/* 标注叠加层（仅在检测格式且开启时显示） */}
-                               {(() => {
-                                 const currentDataset = datasets.find(d => d.id === selectedDsId);
-                                 const isDetection = ['yolo', 'coco', 'voc'].includes(
-                                   currentDataset?.type?.toLowerCase() || ''
-                                 );
-                                 if (isDetection && showAnnotations) {
-                                   const annotations = annotationsCache.get(`${selectedDsId}_${i}`);
-                                   if (annotations && annotations.length > 0) {
-                                     return (
-                                       <AnnotationOverlay
-                                         annotations={annotations}
-                                         imageWidth={annotations[0]._imageWidth || 640}
-                                         imageHeight={annotations[0]._imageHeight || 640}
-                                         displayWidth={0}  // 会自动适应容器
-                                         displayHeight={0}
-                                         showLabels={false}
-                                       />
+                       {/* 图片网格区域 */}
+                       <div id="image-gallery-section">
+                         <div className="grid grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-3 mb-6">
+                           {pagination.isLoading ? (
+                             <div className="col-span-full flex justify-center py-12">
+                               <Loader2 size={32} className="animate-spin text-cyan-500" />
+                             </div>
+                           ) : pagination.currentImages.length > 0 ? (
+                             pagination.currentImages.map((img, index) => {
+                               // 计算全局索引（用于Lightbox）
+                               const globalIndex = (pagination.currentPage - 1) * (typeof pagination.pageSize === 'number' ? pagination.pageSize : 0) + index;
+                               // 构建图片URL
+                               const cacheBuster = Date.now();
+                               const imgUrl = `${apiClient['baseURL']}/datasets/${selectedDsId}/image-file?relative_path=${encodeURIComponent(img.path)}&_t=${cacheBuster}`;
+
+                               return (
+                                 <div
+                                   key={`${img.path}-${index}`}
+                                   onClick={() => setLightboxImg({ url: imgUrl, index: globalIndex, path: img.path })}
+                                   className="aspect-square bg-slate-800 rounded border border-slate-800 overflow-hidden relative group cursor-pointer hover:border-cyan-500 transition-all duration-200"
+                                 >
+                                   <img
+                                     src={imgUrl}
+                                     className="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity"
+                                     onError={(e) => {
+                                       (e.target as HTMLImageElement).src = `https://picsum.photos/600/600?random=${globalIndex}`;
+                                     }}
+                                     alt={`Sample ${globalIndex + 1}`}
+                                   />
+                                   {/* 标注叠加层（仅在检测格式且开启时显示） */}
+                                   {(() => {
+                                     const currentDataset = datasets.find(d => d.id === selectedDsId);
+                                     const isDetection = ['yolo', 'coco', 'voc'].includes(
+                                       currentDataset?.type?.toLowerCase() || ''
                                      );
-                                   }
-                                 }
-                                 return null;
-                               })()}
-                               <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors" />
-                             </div>
-                           ))
-                         ) : (
-                           // 如果没有图片，显示占位符
-                           Array.from({length: Math.min(visibleSamples, 24)}).map((_, i) => (
-                             <div key={i} className="aspect-square bg-slate-800 rounded border border-slate-800 overflow-hidden relative flex items-center justify-center">
-                               <span className="text-slate-600 text-xs">无图片</span>
-                             </div>
-                           ))
+                                     if (isDetection && showAnnotations) {
+                                       const annotations = annotationsCache.get(`${img.path}`);
+                                       if (annotations && annotations.length > 0) {
+                                         return (
+                                           <AnnotationOverlay
+                                             annotations={annotations}
+                                             imageWidth={annotations[0]._imageWidth || img.width || 640}
+                                             imageHeight={annotations[0]._imageHeight || img.height || 640}
+                                             displayWidth={0}
+                                             displayHeight={0}
+                                             showLabels={false}
+                                           />
+                                         );
+                                       }
+                                     }
+                                     return null;
+                                   })()}
+                                   <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors" />
+                                 </div>
+                               );
+                             })
+                           ) : (
+                             // 如果没有图片，显示占位符
+                             Array.from({ length: Math.min(typeof pagination.pageSize === 'number' ? pagination.pageSize : 24, 24) }).map((_, i) => (
+                               <div key={i} className="aspect-square bg-slate-800 rounded border border-slate-800 overflow-hidden relative flex items-center justify-center">
+                                 <span className="text-slate-600 text-xs">无图片</span>
+                               </div>
+                             ))
+                           )}
+                         </div>
+
+                         {/* 分页控件 */}
+                         {pagination.total > 0 && (
+                           <PaginationControls
+                             currentPage={pagination.currentPage}
+                             totalPages={pagination.totalPages}
+                             pageSize={pagination.pageSize}
+                             total={pagination.total}
+                             loadedCount={pagination.currentImages.length}
+                             onPageChange={handlePageChange}
+                             onPageSizeChange={handlePageSizeChange}
+                             disabled={pagination.isLoading}
+                           />
                          )}
                        </div>
-
-                       {/* Load More Button - 只在有更多图片时显示 */}
-                       {(selectedClass ? classImages : imageUrls).length > visibleSamples && (
-                         <div className="flex justify-center">
-                           <button
-                             onClick={handleLoadMore}
-                             disabled={isLoadingMore}
-                             className="px-6 py-2 bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-white rounded-full border border-slate-700 transition-all text-xs font-medium flex items-center disabled:opacity-50"
-                           >
-                             {isLoadingMore ? (
-                                <span className="flex items-center"><div className="w-3 h-3 rounded-full border-2 border-slate-500 border-t-transparent animate-spin mr-2"></div> Loading...</span>
-                             ) : (
-                                <span className="flex items-center"><ChevronDown size={14} className="mr-1" /> 加载更多 ({(selectedClass ? classImages : imageUrls).length - visibleSamples})</span>
-                             )}
-                           </button>
-                         </div>
-                       )}
                     </div>
                    </>
                  );
