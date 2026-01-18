@@ -9,10 +9,14 @@
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Set, Optional, Tuple
+from typing import Dict, List, Set, Optional, Tuple, TYPE_CHECKING
 from collections import deque
 from enum import Enum
 from loguru import logger
+
+# 延迟导入避免循环依赖
+if TYPE_CHECKING:
+    from app.utils.shape_inference import TensorShape, NodeShapeInfo
 
 
 # ==============================
@@ -580,7 +584,7 @@ def check_required_params(node: Node) -> List[str]:
 # 增强的图验证规则
 # ==============================
 
-def validate_type_compatibility(graph: Graph) -> List[str]:
+def validate_type_compatibility(graph: Graph, shape_map: Dict[str, 'NodeShapeInfo'] = None) -> List[str]:
     """
     验证相邻节点之间的类型兼容性
 
@@ -588,9 +592,11 @@ def validate_type_compatibility(graph: Graph) -> List[str]:
     1. Linear层前必须有Flatten或1D张量输入
     2. 2D卷积/池化/归一化层不能接Flatten后的1D张量
     3. Concat/Add节点至少需要2个输入
+    4. 新增：支持基于形状的智能验证，允许 Linear -> ReLU -> Linear
 
     参数:
         graph: 计算图
+        shape_map: 形状映射（可选），用于智能验证
 
     返回:
         List[str]: 错误列表
@@ -603,10 +609,11 @@ def validate_type_compatibility(graph: Graph) -> List[str]:
         "AdaptiveAvgPool2d", "BatchNorm2d", "InstanceNorm2d", "GroupNorm"
     }
 
-    # 可以接1D张量的层类型
-    accepts_1d_input = {
-        "Linear", "Flatten", "Dropout", "ReLU", "LeakyReLU", "SiLU",
-        "Sigmoid", "Softmax", "LayerNorm", "Identity"
+    # 可以接1D张量的层类型（可以接在Linear后面）
+    can_follow_1d = {
+        "Linear", "Flatten", "Dropout", "DropPath", "LayerNorm",
+        "ReLU", "LeakyReLU", "SiLU", "Sigmoid", "Softmax", "Identity",
+        "GELU", "Tanh", "ReLU6", "Hardswish"
     }
 
     for node_id, node in graph.nodes.items():
@@ -621,14 +628,36 @@ def validate_type_compatibility(graph: Graph) -> List[str]:
         if node.type == "Add" and len(predecessors) < 2:
             errors.append(f"{node_id}: Add至少需要2个输入，当前{len(predecessors)}个")
 
-        # Linear层建议接Flatten或已经是1D张量
-        # 注意：Input节点可以直接连接Linear，此时形状会在形状推断中计算
+        # Linear层智能验证 - 基于形状或前置节点类型
         if node.type == "Linear":
             for pred_id in predecessors:
                 pred_node = graph.nodes[pred_id]
-                # Dropout可以接在任何层之前，所以不检查Dropout
-                if pred_node.type not in ["Flatten", "Linear", "AdaptiveAvgPool2d", "AdaptiveAvg",
-                                           "LayerNorm", "Dropout", "DropPath", "Input"]:
+
+                # 1. 如果有形状信息，检查前置节点的输出形状
+                if shape_map and pred_id in shape_map:
+                    pred_shape_info = shape_map[pred_id]
+                    # NodeShapeInfo.output_shape 是 TensorShape 对象
+                    pred_shape = pred_shape_info.output_shape
+                    # 如果前置节点的输出已经是1D（features存在），则可以连接
+                    if pred_shape.features is not None:
+                        continue  # 形状已经是1D，验证通过
+
+                # 2. 检查前置节点的前置节点，看是否有Linear/Flatten
+                # 这支持 Linear -> ReLU -> Linear 的模式
+                pred_preds = graph.get_predecessors(pred_id)
+                has_flatten_or_linear_before = any(
+                    graph.nodes[p].type in ["Linear", "Flatten", "AdaptiveAvgPool2d", "AdaptiveAvg"]
+                    for p in pred_preds
+                )
+
+                # 3. 如果激活函数前面有Linear/Flatten，或者是其他允许的类型，则合法
+                if pred_node.type in can_follow_1d and has_flatten_or_linear_before:
+                    continue
+
+                # 4. 传统的类型检查（当以上条件都不满足时）
+                if pred_node.type not in ["Flatten", "Linear", "AdaptiveAvgPool2d",
+                                           "AdaptiveAvg", "LayerNorm", "Dropout",
+                                           "DropPath", "Input"]:
                     errors.append(
                         f"{node_id}: Linear层应接Flatten或1D张量，当前接了{pred_node.type}。"
                         f"建议在Linear前添加Flatten层。"
@@ -838,6 +867,8 @@ def analyze_graph_structure(graph_json: dict) -> dict:
     """
     分析图结构的入口函数
 
+    新增：集成形状推断，支持基于形状的智能验证
+
     参数:
         graph_json: 前端传来的模型图JSON
 
@@ -849,13 +880,17 @@ def analyze_graph_structure(graph_json: dict) -> dict:
                 "execution_order": 执行顺序
             }
     """
+    # 延迟导入避免循环依赖
+    from app.utils.shape_inference import infer_shapes_from_graph
+
     # 解析图
     graph = GraphParser.parse_graph(graph_json)
 
-    # 验证图
-    validation = validate_graph(graph)
+    # 第一步：基础验证（不包括类型兼容性验证，因为需要形状信息）
+    logger.debug("开始基础验证（不包括类型兼容性）")
+    validation = validate_graph(graph, enable_advanced_validation=False)
 
-    # 如果验证失败，提前返回
+    # 如果基础验证失败，提前返回
     if not validation["valid"]:
         return {
             "graph": graph,
@@ -863,11 +898,11 @@ def analyze_graph_structure(graph_json: dict) -> dict:
             "execution_order": None
         }
 
-    # 拓扑排序
+    # 第二步：拓扑排序
     try:
         topo_order = topological_sort(graph)
     except ValueError as e:
-        validation["errors"].append(str(e))
+        validation["errors"].append(f"拓扑排序失败: {str(e)}")
         validation["valid"] = False
         return {
             "graph": graph,
@@ -877,6 +912,27 @@ def analyze_graph_structure(graph_json: dict) -> dict:
 
     # 确定执行顺序
     execution_order = determine_execution_order(graph, topo_order)
+
+    # 第三步：形状推断（用于智能类型兼容性验证）
+    logger.debug("进行形状推断")
+    try:
+        shape_result = infer_shapes_from_graph(graph, execution_order)
+        shape_map = shape_result.get("shape_map", {})
+        logger.debug(f"形状推断完成，推断出 {len(shape_map)} 个节点的形状")
+    except Exception as e:
+        logger.warning(f"形状推断失败: {e}，将使用传统验证规则")
+        shape_map = {}
+
+    # 第四步：使用形状信息进行类型兼容性验证
+    logger.debug("进行智能类型兼容性验证")
+    type_compat_errors = validate_type_compatibility(graph, shape_map)
+    if type_compat_errors:
+        validation["validation_details"]["type_compatibility"] = {
+            "passed": False,
+            "errors": type_compat_errors
+        }
+        validation["errors"].extend(type_compat_errors)
+        validation["valid"] = False
 
     return {
         "graph": graph,

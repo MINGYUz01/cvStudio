@@ -157,6 +157,74 @@ const CustomDialog: React.FC<DialogProps> = ({ isOpen, type, title, message, def
     );
 };
 
+// --- 错误详情弹窗组件 ---
+interface ErrorDetailDialogProps {
+  isOpen: boolean;
+  title: string;
+  message: string;
+  errors: string[];
+  warnings: string[];
+  onClose: () => void;
+}
+
+const ErrorDetailDialog: React.FC<ErrorDetailDialogProps> = ({
+  isOpen, title, message, errors, warnings, onClose
+}) => {
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 z-[300] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+      <div className="bg-slate-900 border border-rose-700/50 p-6 rounded-xl w-full max-w-lg shadow-2xl animate-in fade-in zoom-in duration-200">
+        <div className="flex items-center gap-3 mb-4">
+          <div className="w-10 h-10 rounded-full bg-rose-900/30 flex items-center justify-center shrink-0">
+            <AlertOctagon size={20} className="text-rose-500" />
+          </div>
+          <h3 className="text-xl font-bold text-white">{title}</h3>
+        </div>
+
+        {message && (
+          <p className="text-slate-300 mb-4">{message}</p>
+        )}
+
+        {errors.length > 0 && (
+          <div className="mb-4">
+            <h4 className="text-sm font-semibold text-rose-400 mb-2">错误详情:</h4>
+            <ul className="text-sm text-slate-300 space-y-1 bg-slate-950/50 p-3 rounded-lg max-h-40 overflow-y-auto">
+              {errors.map((err, i) => (
+                <li key={i} className="flex items-start gap-2">
+                  <span className="text-rose-500 mt-0.5 shrink-0">•</span>
+                  <span className="break-words">{err}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {warnings.length > 0 && (
+          <div className="mb-4">
+            <h4 className="text-sm font-semibold text-amber-400 mb-2">警告:</h4>
+            <ul className="text-sm text-slate-300 space-y-1 bg-slate-950/50 p-3 rounded-lg max-h-32 overflow-y-auto">
+              {warnings.map((warn, i) => (
+                <li key={i} className="flex items-start gap-2">
+                  <span className="text-amber-500 mt-0.5 shrink-0">•</span>
+                  <span className="break-words">{warn}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        <button
+          onClick={onClose}
+          className="w-full py-2.5 bg-rose-600 hover:bg-rose-500 text-white rounded-lg font-medium transition-colors"
+        >
+          关闭
+        </button>
+      </div>
+    </div>
+  );
+};
+
 
 const ModelBuilder: React.FC = () => {
   // Main View State: 'architectures', 'weights', or 'generated'
@@ -307,6 +375,21 @@ const ModelBuilder: React.FC = () => {
       type: 'alert',
       title: '',
       action: 'clear_canvas'
+  });
+
+  // Error Detail Dialog State - 显示详细的错误和警告信息
+  const [errorDialog, setErrorDialog] = useState<{
+    show: boolean;
+    title: string;
+    message: string;
+    errors: string[];
+    warnings: string[];
+  }>({
+    show: false,
+    title: '',
+    message: '',
+    errors: [],
+    warnings: []
   });
 
   // Custom Templates State (Persisted)
@@ -460,45 +543,40 @@ const ModelBuilder: React.FC = () => {
       }
     } catch (error: any) {
       console.error('代码生成失败:', error);
+      console.error('error.detail:', error.detail);
+      console.error('error.message:', error.message);
 
       // 解析详细的错误信息
-      let errorMsg = '未知错误';
       let detailMsg = '';
+      let errorDetails: string[] = [];
+      let warnings: string[] = [];
 
       if (error.detail) {
         if (typeof error.detail === 'string') {
           detailMsg = error.detail;
         } else if (typeof error.detail === 'object') {
           const detail = error.detail;
-          if (detail.message) {
-            detailMsg = detail.message;
-          }
-          if (detail.errors && detail.errors.length > 0) {
-            detailMsg += ': ' + detail.errors.join('; ');
-          }
-          if (detail.warnings && detail.warnings.length > 0) {
-            detailMsg += ' (警告: ' + detail.warnings.join('; ') + ')';
-          }
+          detailMsg = detail.message || '代码生成失败';
+          errorDetails = detail.errors || [];
+          warnings = detail.warnings || [];
         }
       } else if (error.message) {
         detailMsg = error.message;
       }
 
-      // 根据错误类型提供更友好的提示
-      if (detailMsg.includes('形状推断失败')) {
-        errorMsg = '模型结构问题：无法推断张量形状。请检查节点连接是否正确。';
-      } else if (detailMsg.includes('图结构验证失败')) {
-        errorMsg = '模型验证失败：' + detailMsg;
-      } else if (detailMsg.includes('参数缺失')) {
-        errorMsg = '节点参数不完整：' + detailMsg;
-      } else if (detailMsg.includes('循环依赖')) {
-        errorMsg = '检测到循环依赖，请检查节点连接。';
-      } else {
-        errorMsg = detailMsg || '未知错误';
-      }
+      console.log('解析后的错误信息:', { detailMsg, errorDetails, warnings });
 
-      setCodeGenerationError(detailMsg || errorMsg);
-      showNotification("代码生成失败: " + errorMsg, "error");
+      // 显示详细错误弹窗
+      setErrorDialog({
+        show: true,
+        title: '代码生成失败',
+        message: detailMsg || '代码生成过程中发生错误',
+        errors: errorDetails,
+        warnings: warnings
+      });
+
+      setCodeGenerationError(detailMsg);
+      showNotification("代码生成失败，请查看详细信息", "error");
     } finally {
       setIsGeneratingCode(false);
     }
@@ -1436,7 +1514,7 @@ const ModelBuilder: React.FC = () => {
         )}
 
         {/* Global Dialog */}
-        <CustomDialog 
+        <CustomDialog
             isOpen={dialog.isOpen}
             type={dialog.type}
             title={dialog.title}
@@ -1444,6 +1522,16 @@ const ModelBuilder: React.FC = () => {
             defaultValue={dialog.defaultValue}
             onClose={() => setDialog({ ...dialog, isOpen: false })}
             onConfirm={handleDialogConfirm}
+        />
+
+        {/* Error Detail Dialog */}
+        <ErrorDetailDialog
+            isOpen={errorDialog.show}
+            title={errorDialog.title}
+            message={errorDialog.message}
+            errors={errorDialog.errors}
+            warnings={errorDialog.warnings}
+            onClose={() => setErrorDialog({ ...errorDialog, show: false })}
         />
 
         {/* CONTENT AREA SWITCH */}

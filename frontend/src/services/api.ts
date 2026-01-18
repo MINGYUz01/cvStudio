@@ -138,12 +138,38 @@ class ApiClient {
       }
     }
 
-    // 处理错误响应
+    // 处理错误响应 - 保留完整错误对象
     if (!response.ok) {
-      const error = await response.json().catch(() => ({
-        detail: '请求失败',
-      }));
-      throw new Error(error.detail || '请求失败');
+      const error = await response.json().catch((e) => {
+        console.error('解析JSON失败:', e);
+        return { message: '请求失败' };
+      });
+      console.log('后端返回的错误响应:', error);
+
+      // 统一错误格式：无论是 detail 格式还是新格式，都转换为统一的 detail 对象
+      let errorDetail: any;
+      if (error.detail) {
+        // FastAPI 默认格式
+        errorDetail = error.detail;
+      } else if (error.message || error.errors || error.warnings) {
+        // 自定义异常处理器格式
+        errorDetail = {
+          message: error.message,
+          errors: error.errors || [],
+          warnings: error.warnings || []
+        };
+      } else {
+        errorDetail = { message: '请求失败' };
+      }
+
+      // 构造带完整信息的错误对象
+      const err: any = new Error(
+        typeof errorDetail === 'string' ? errorDetail : (errorDetail.message || '请求失败')
+      );
+      err.detail = errorDetail;
+      err.status = response.status;
+      console.log('构造的错误对象:', err);
+      throw err;
     }
 
     return response.json();

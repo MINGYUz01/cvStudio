@@ -142,14 +142,30 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 async def http_exception_handler(request: Request, exc: StarletteHTTPException):
     """HTTP异常处理器"""
-    return JSONResponse(
-        status_code=exc.status_code,
-        content={
+    # 如果 detail 是包含 message/errors/warnings 的结构化对象，直接使用
+    if isinstance(exc.detail, dict) and ("message" in exc.detail or "errors" in exc.detail):
+        content = {
+            "error": True,
+            "status_code": exc.status_code,
+            "path": str(request.url.path)
+        }
+        # 保留原有的结构化信息
+        if isinstance(exc.detail, dict):
+            content.update(exc.detail)
+        else:
+            content["message"] = exc.detail
+    else:
+        # 简单的字符串错误消息
+        content = {
             "error": True,
             "message": exc.detail,
             "status_code": exc.status_code,
             "path": str(request.url.path)
         }
+
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=content
     )
 
 
