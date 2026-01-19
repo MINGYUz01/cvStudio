@@ -56,6 +56,11 @@ def start_training(self, experiment_id: str, config: Dict[str, Any]) -> Dict[str
 
     try:
         logger.info(f"开始训练任务: {experiment_id}")
+
+        # 首先创建训练会话
+        training_logger.create_session(experiment_id, config)
+        debug_log("训练会话已创建")
+
         debug_log("更新训练状态为 RUNNING...")
 
         # 更新状态为running

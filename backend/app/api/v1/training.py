@@ -216,24 +216,87 @@ async def start_training_run(
                 "task_id": training_run.celery_task_id
             }
 
-        # 获取模型架构信息
-        from app.services.model_service import ModelService
-        model_service = ModelService()
+        # 获取模型架构信息（支持 Model 表和 PresetModel 表）
+        from app.models.model import Model, PresetModel
+        import json
 
         debug_log(f"获取模型架构信息: model_id={training_run.model_id}")
-        model_code = model_service.get_model_code(db, training_run.model_id)
-        if not model_code:
-            debug_log(f"模型代码不存在: {training_run.model_id}", "ERROR")
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"模型代码不存在: {training_run.model_id}"
+
+        # 首先尝试从 Model 表获取
+        model = db.query(Model).filter(Model.id == training_run.model_id).first()
+
+        if model:
+            # 从 graph_json 获取模型架构信息
+            graph_json = model.graph_json if isinstance(model.graph_json, dict) else json.loads(model.graph_json) if model.graph_json else {}
+            model_arch = {
+                "architecture": graph_json,
+                "class_name": graph_json.get("class_name", "Model"),
+                "input_size": graph_json.get("input_size", 224),
+                "code_path": model.code_path
+            }
+            debug_log(f"从 Model 表获取模型: class_name={model_arch['class_name']}")
+        else:
+            # 尝试从 PresetModel 表获取
+            debug_log(f"Model 表中未找到 model_id={training_run.model_id}，尝试从 PresetModel 获取")
+            preset_model = db.query(PresetModel).filter(PresetModel.id == training_run.model_id).first()
+
+            if not preset_model:
+                debug_log(f"PresetModel 中也未找到: model_id={training_run.model_id}", "ERROR")
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"模型不存在: {training_run.model_id}"
+                )
+
+            # 从 PresetModel 的 architecture_data 获取模型信息
+            arch_data = preset_model.architecture_data if isinstance(preset_model.architecture_data, dict) else {}
+            extra_meta = preset_model.extra_metadata if isinstance(preset_model.extra_metadata, dict) else {}
+
+            # 提取 input_size，优先从 extra_metadata.input_shape 获取
+            input_size = 224
+            if extra_meta.get("input_shape") and len(extra_meta["input_shape"]) >= 3:
+                input_size = extra_meta["input_shape"][2]  # [C, H, W] 取 W
+            elif arch_data.get("input_size"):
+                input_size = arch_data["input_size"]
+            elif extra_meta.get("input_size"):
+                input_size = extra_meta["input_size"]
+
+            # 生成 class_name
+            class_name = arch_data.get("class_name") or extra_meta.get("class_name")
+            if not class_name:
+                # 从预设模型名称生成类名
+                class_name = preset_model.name.replace("-", "").replace(" ", "_").replace(".", "")
+
+            # PresetModel 到预训练模型的映射
+            # 根据预设模型的 category 和 name 选择合适的预训练模型
+            PRESET_MODEL_MAP = {
+                # 分类任务
+                "Image Classification": "resnet18",
+                "LeNet-5": "lenet",  # 简单模型，会在 ModelFactory 中特殊处理
+                "Simple CNN": "simple_cnn",
+                "AlexNet": "alexnet",
+                "VGG-16": "vgg16",
+                "ResNet-18": "resnet18",
+                # 检测任务
+                "YOLO-like Detection": "yolov5n",
+            }
+
+            # 获取预设模型对应的预训练模型名称
+            pretrained_model_name = PRESET_MODEL_MAP.get(
+                preset_model.name,
+                # 默认根据 category 选择
+                "resnet18" if preset_model.category == "classification" else "yolov5n"
             )
 
-        model_arch = {
-            "architecture": model_code.code_content,
-            "class_name": model_code.code_content.get("class_name", "Model"),
-            "input_size": model_code.code_content.get("input_size", 224)
-        }
+            model_arch = {
+                "architecture": pretrained_model_name,  # 使用字符串而不是字典
+                "class_name": class_name,
+                "input_size": input_size,
+                "code_path": None,
+                "preset_model_id": preset_model.id,
+                "preset_model_name": preset_model.name,
+                "category": preset_model.category
+            }
+            debug_log(f"从 PresetModel 表获取模型: name={preset_model.name}, 使用预训练模型={pretrained_model_name}")
 
         # 获取数据集信息
         from app.services.dataset_service import DatasetService
@@ -252,7 +315,7 @@ async def start_training_run(
             "id": dataset.id,
             "name": dataset.name,
             "format": dataset.format,
-            "root_path": dataset.root_path,
+            "path": dataset.path,
             "num_classes": dataset.num_classes,
             "num_images": dataset.num_images
         }
@@ -332,10 +395,35 @@ async def delete_training_run(
     """
     删除训练任务
 
+    如果任务正在运行或排队中，会先取消对应的Celery任务
+
     Args:
         training_id: 训练任务ID
         db: 数据库会话
     """
+    debug_log(f"收到删除训练任务请求: training_id={training_id}")
+
+    # 获取训练任务（用于检查状态和获取celery_task_id）
+    training_run = training_service.get_training_run(db, training_id)
+
+    if not training_run:
+        debug_log(f"训练任务不存在: {training_id}", "ERROR")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"训练任务不存在: {training_id}"
+        )
+
+    # 如果任务正在运行或排队中，取消Celery任务
+    if training_run.celery_task_id and training_run.status in ["running", "queued"]:
+        try:
+            from backend.celery_app import celery_app
+            celery_app.control.revoke(training_run.celery_task_id, terminate=True, signal='SIGKILL')
+            debug_log(f"已取消Celery任务: {training_run.celery_task_id}, 状态: {training_run.status}")
+        except Exception as e:
+            debug_log(f"取消Celery任务失败: {e}", "WARNING")
+            # 继续删除流程
+
+    # 删除训练任务
     success = training_service.delete_training_run(db, training_id)
 
     if not success:
@@ -344,6 +432,7 @@ async def delete_training_run(
             detail=f"训练任务不存在: {training_id}"
         )
 
+    debug_log(f"训练任务已删除: {training_id}")
     return None
 
 

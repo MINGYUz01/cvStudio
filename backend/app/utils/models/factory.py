@@ -137,7 +137,7 @@ class ModelFactory:
         动态加载代码生成器生成的模型
 
         Args:
-            architecture_config: 架构配置（包含code字段）
+            architecture_config: 架构配置（包含code_path字段）
             num_classes: 类别数
 
         Returns:
@@ -149,17 +149,52 @@ class ModelFactory:
             try:
                 import importlib.util
                 import sys
+                from pathlib import Path
 
-                spec = importlib.util.spec_from_file_location("generated_model", code_path)
+                # 检查文件是否存在
+                path = Path(code_path)
+                if not path.exists():
+                    raise ValueError(f"模型代码文件不存在: {code_path}")
+
+                # 使用唯一模块名避免冲突
+                module_name = f"generated_model_{id(architecture_config)}"
+                spec = importlib.util.spec_from_file_location(module_name, code_path)
+                if spec is None or spec.loader is None:
+                    raise ValueError(f"无法加载模块: {code_path}")
+
                 module = importlib.util.module_from_spec(spec)
-                sys.modules["generated_model"] = module
+                sys.modules[module_name] = module
                 spec.loader.exec_module(module)
 
-                # 获取模型类
-                model_class_name = architecture_config.get("model_class_name", "GeneratedModel")
+                # 获取模型类 - 兼容 "model_class_name" 和 "class_name" 两种字段名
+                model_class_name = architecture_config.get("model_class_name") or architecture_config.get("class_name", "GeneratedModel")
+
+                if not hasattr(module, model_class_name):
+                    # 尝试查找模块中的第一个 nn.Module 类
+                    for attr_name in dir(module):
+                        attr = getattr(module, attr_name)
+                        if isinstance(attr, type) and issubclass(attr, nn.Module) and attr != nn.Module:
+                            model_class_name = attr_name
+                            break
+                    else:
+                        raise ValueError(f"模块中未找到模型类: {model_class_name}")
+
                 model_class = getattr(module, model_class_name)
 
-                return model_class(num_classes=num_classes)
+                # 尝试不同的方式实例化模型
+                try:
+                    # 1. 首先尝试传递 num_classes 参数
+                    return model_class(num_classes=num_classes)
+                except TypeError:
+                    try:
+                        # 2. 如果不接受参数，尝试无参数实例化
+                        return model_class()
+                    except Exception as e:
+                        raise ValueError(
+                            f"无法实例化模型类 {model_class_name}: "
+                            f"尝试了 with(num_classes={num_classes}) 和 without() 都失败。"
+                            f"请确保生成的模型 __init__ 接受 num_classes 参数或不接受任何参数。"
+                        )
             except Exception as e:
                 raise ValueError(f"加载生成的模型失败: {e}")
 
@@ -179,7 +214,7 @@ class ModelFactory:
             except Exception as e:
                 raise ValueError(f"执行生成的代码失败: {e}")
 
-        raise ValueError("无法加载生成的模型：缺少代码")
+        raise ValueError("无法加载生成的模型：缺少代码路径或代码字符串")
 
     @staticmethod
     def list_pretrained_models() -> list:

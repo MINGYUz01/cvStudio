@@ -90,13 +90,15 @@ interface Experiment {
   endTime?: string;
 }
 
-// 模型文件接口
+// 模型文件接口（可训练模型）
 interface ModelFile {
   id: number;
   name: string;
   file_name: string;
   code_size: number;
   created: string;
+  has_code?: boolean;
+  class_name?: string;
 }
 
 // 数据增强策略接口
@@ -113,36 +115,31 @@ const TRAINING_SCHEMA = {
     training: {
       title: "核心训练参数 / Hyperparameters",
       fields: {
+        // 基础训练参数
         batch_size: { value: 16, ui: { type: "number", label: "Batch Size", min: 1, step: 1, hint: "每次迭代样本数" } },
-        epochs: { value: 100, ui: { type: "number", label: "Epochs", min: 1 } },
-        learning_rate: { value: 0.0003, ui: { type: "number", label: "Learning Rate", format: "scientific", hint: "初始学习率" } },
-        optimizer: { value: "AdamW", ui: { type: "select", label: "Optimizer", options: ["Adam", "AdamW", "SGD", "RMSprop"] } },
-        lr_scheduler: { value: "Cosine", ui: { type: "select", label: "LR Scheduler", options: ["None", "Step", "Cosine", "ReduceOnPlateau"] } },
+        epochs: { value: 50, ui: { type: "number", label: "Epochs", min: 1 } },
+        learning_rate: { value: 0.001, ui: { type: "number", label: "Learning Rate", format: "scientific", hint: "初始学习率" } },
+        optimizer: { value: "Adam", ui: { type: "select", label: "Optimizer", options: ["Adam", "AdamW", "SGD", "RMSprop"] } },
         weight_decay: { value: 0.0001, ui: { type: "number", label: "Weight Decay", format: "scientific" } },
-        
-        input_size: { value: 640, ui: { type: "number", label: "Input Size (px)", hint: "检测通常较大" } },
-        num_classes: { value: 80, ui: { type: "number", label: "Num Classes", min: 1 } },
-        pretrained: { 
-          value: "IMAGENET_1K_V1", 
-          ui: { 
-            type: "select", 
-            label: "Pretrained Weights", 
-            options: ["None", "IMAGENET_1K_V1", "yolov8n-traffic-best.pt", "resnet50-mri-v2.pt"] 
-          } 
+
+        // 学习率调度
+        lr_scheduler: { value: "Cosine", ui: { type: "select", label: "LR Scheduler", options: ["None", "Step", "Cosine", "ReduceOnPlateau"] } },
+
+        // 数据相关（num_classes 从数据集自动获取，不再在此配置）
+        input_size: { value: 224, ui: { type: "number", label: "Input Size (px)", hint: "模型输入图像尺寸" } },
+
+        // 训练控制
+        val_interval: { value: 1, ui: { type: "number", label: "Val Interval", hint: "每 N 个 epoch 验证一次" } },
+        early_stopping: {
+          value: 10,
+          ui: { type: "number", label: "Early Stop Patience", min: 0, hint: "0 表示关闭早停" }
         },
-        
-        val_interval: { value: 1, ui: { type: "number", label: "Val Interval" } },
-        monitor_metric: { value: "val_loss", ui: { type: "select", label: "Monitor Metric", options: ["val_loss", "accuracy", "mAP", "IoU"] } },
-        
-        early_stopping: { 
-          value: 10, 
-          ui: { type: "number", label: "Early Stop Patience", min: 0, hint: "0 to disable" } 
-        },
-        
-        num_workers: { value: 8, ui: { type: "number", label: "Num Workers" } },
-        seed: { value: 42, ui: { type: "number", label: "Random Seed" } },
-        
-        amp: { value: true, ui: { type: "switch", label: "Mixed Precision (AMP)" } },
+        save_period: { value: 10, ui: { type: "number", label: "Save Period", min: 1, hint: "每 N 个 epoch 保存检查点" } },
+
+        // 其他
+        device: { value: "cuda", ui: { type: "select", label: "Device", options: ["cuda", "cpu"] } },
+        num_workers: { value: 4, ui: { type: "number", label: "DataLoader Workers", min: 0, hint: "数据加载线程数" } },
+        amp: { value: true, ui: { type: "switch", label: "Mixed Precision (AMP)", hint: "混合精度训练可加速" } },
       }
     }
   },
@@ -150,16 +147,14 @@ const TRAINING_SCHEMA = {
     classification: {
       title: "分类特定参数 (Classification)",
       fields: {
-        label_smoothing: { value: 0.1, ui: { type: "slider", label: "Label Smoothing", min: 0.0, max: 0.2, step: 0.01 } },
-        dropout: { value: 0.2, ui: { type: "slider", label: "Dropout Rate", min: 0.0, max: 0.7, step: 0.05 } }
+        label_smoothing: { value: 0.0, ui: { type: "slider", label: "Label Smoothing", min: 0.0, max: 0.2, step: 0.01 } },
       }
     },
     detection: {
       title: "检测特定参数 (Detection)",
       fields: {
         conf_threshold: { value: 0.25, ui: { type: "slider", label: "Conf Threshold", min: 0.0, max: 1.0, step: 0.05 } },
-        nms_iou_threshold: { value: 0.5, ui: { type: "slider", label: "NMS IoU Threshold", min: 0.3, max: 0.9, step: 0.05 } },
-        max_detections: { value: 100, ui: { type: "number", label: "Max Detections" } }
+        nms_iou_threshold: { value: 0.45, ui: { type: "slider", label: "NMS IoU Threshold", min: 0.3, max: 0.9, step: 0.05 } },
       }
     }
   }
@@ -407,10 +402,10 @@ const TrainingMonitor: React.FC = () => {
 
   const fetchModelFiles = useCallback(async () => {
     try {
-      // 获取已生成的模型文件列表
+      // 获取可训练模型列表（包含自定义生成的模型）
       const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1';
       const token = localStorage.getItem('access_token');
-      const response = await fetch(`${baseUrl}/models/generated-files`, {
+      const response = await fetch(`${baseUrl}/models/trainable`, {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
@@ -418,10 +413,20 @@ const TrainingMonitor: React.FC = () => {
       });
       if (response.ok) {
         const data = await response.json();
-        setModelFiles(data.codes || data.data || []);
+        // 转换为前端需要的格式
+        const models = data.models || [];
+        setModelFiles(models.map((m: any) => ({
+          id: m.id,
+          name: m.name,
+          file_name: m.code_path ? m.code_path.split('\\').pop().split('/').pop() : 'unknown.py',
+          code_size: 0,
+          created: m.created_at,
+          has_code: m.has_code,
+          class_name: m.class_name
+        })));
       }
     } catch (err) {
-      console.error('获取模型文件失败:', err);
+      console.error('获取可训练模型失败:', err);
     }
   }, []);
 
@@ -602,21 +607,28 @@ const TrainingMonitor: React.FC = () => {
     try {
       setLoading(true);
 
-      // 构建训练配置
+      // 构建训练配置（字段名映射到后端期望的格式）
       const trainingConfig = {
         task_type: formTask,
-        epochs: config.epochs || 100,
+        epochs: config.epochs || 50,
         batch_size: config.batch_size || 16,
         learning_rate: config.learning_rate || 0.001,
         optimizer: config.optimizer || 'Adam',
         device: config.device || 'cuda',
-        ...config
+        // 字段名映射
+        scheduler: config.lr_scheduler || 'Cosine',
+        image_size: config.input_size || 224,
+        save_period: config.save_period || 10,
+        val_interval: config.val_interval || 1,
+        early_stopping: config.early_stopping || 10,
+        num_workers: config.num_workers || 4,
+        weight_decay: config.weight_decay || 0.0001,
+        amp: config.amp || false,
+        // 任务特定参数
+        label_smoothing: config.label_smoothing || 0.0,
+        conf_thres: config.conf_threshold || 0.25,
+        nms_iou_threshold: config.nms_iou_threshold || 0.45,
       };
-
-      // 如果选择了权重，添加到配置中
-      if (formWeightId) {
-        trainingConfig.pretrained_weight_id = formWeightId;
-      }
 
       // 如果选择了增强策略，添加到配置中
       if (formAugmentationId) {
@@ -656,7 +668,6 @@ const TrainingMonitor: React.FC = () => {
       setFormModelFileId(null);
       setFormDatasetId(null);
       setFormAugmentationId(null);
-      setFormWeightId(null);
 
       // 切换到列表视图
       setView('list');
@@ -1096,32 +1107,10 @@ const TrainingMonitor: React.FC = () => {
                                             onChange={e => setFormModelFileId(e.target.value ? Number(e.target.value) : null)}
                                             className="w-full bg-slate-950 border border-slate-700 rounded pl-9 pr-3 py-2 text-white text-sm outline-none focus:border-cyan-500 transition-colors appearance-none cursor-pointer"
                                         >
-                                            <option value="">Select Model File...</option>
+                                            <option value="">选择自定义模型...</option>
                                             {modelFiles.map((mf) => (
-                                                <option key={mf.id} value={mf.id}>
-                                                    {mf.name} ({mf.file_name})
-                                                </option>
-                                            ))}
-                                        </select>
-                                        <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none" />
-                                    </div>
-                                </div>
-
-                                {/* 权重选择 */}
-                                <div className="group">
-                                    <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1 group-hover:text-slate-400 transition-colors">预训练权重 (可选)</label>
-                                    <div className="relative">
-                                        <HardDrive size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
-                                        <select
-                                            style={{ colorScheme: 'dark' }}
-                                            value={formWeightId || ''}
-                                            onChange={e => setFormWeightId(e.target.value ? Number(e.target.value) : null)}
-                                            className="w-full bg-slate-950 border border-slate-700 rounded pl-9 pr-3 py-2 text-white text-sm outline-none focus:border-cyan-500 transition-colors appearance-none cursor-pointer"
-                                        >
-                                            <option value="">None (从头训练)</option>
-                                            {weights.map((w) => (
-                                                <option key={w.id} value={w.id}>
-                                                    {w.display_name} ({w.task_type})
+                                                <option key={mf.id} value={mf.id} title={mf.file_name}>
+                                                    {mf.name} {mf.has_code ? '✓' : '(无代码)'} - {mf.class_name || 'Model'}
                                                 </option>
                                             ))}
                                         </select>
@@ -1139,10 +1128,10 @@ const TrainingMonitor: React.FC = () => {
                                             onChange={e => setFormDatasetId(e.target.value ? Number(e.target.value) : null)}
                                             className="w-full bg-slate-950 border border-slate-700 rounded pl-9 pr-3 py-2 text-white text-sm outline-none focus:border-cyan-500 transition-colors appearance-none cursor-pointer"
                                         >
-                                            <option value="">Select Dataset...</option>
+                                            <option value="">选择数据集...</option>
                                             {datasets.map((ds) => (
                                                 <option key={ds.id} value={ds.id}>
-                                                    {ds.name} ({ds.format}, {ds.num_images} images)
+                                                    {ds.name} ({ds.format}, {ds.num_classes}类, {ds.num_images}图)
                                                 </option>
                                             ))}
                                         </select>

@@ -128,16 +128,29 @@ class Trainer:
 
         # 2. 创建模型
         try:
-            self.model = ModelFactory.create({
+            # 优先使用 model_arch_info（包含 code_path 等完整信息）
+            model_arch_info = self.config.get('model_arch_info')
+
+            model_config = {
                 'task_type': self.task_type,
-                'architecture': self.config.get('model_architecture', 'resnet18'),
                 'num_classes': self.config.get('num_classes', 10),
                 'input_channels': self.config.get('input_channels', 3),
                 'pretrained': self.config.get('pretrained', False),
                 'dropout': self.config.get('dropout', 0.0)
-            })
+            }
+
+            # 如果有完整的模型架构信息且有 code_path，使用动态加载
+            if model_arch_info and model_arch_info.get('code_path'):
+                model_config['architecture'] = model_arch_info  # 传递完整的架构信息（包含 code_path）
+                self.logger.info(f"使用自定义模型: {model_arch_info.get('code_path')}")
+            else:
+                # 降级处理：使用 model_architecture（用于预设模型）
+                model_config['architecture'] = self.config.get('model_architecture', 'resnet18')
+                self.logger.info(f"使用预设模型: {model_config['architecture']}")
+
+            self.model = ModelFactory.create(model_config)
             self.model.to(self.device)
-            self.logger.info(f"模型创建成功: {self.config.get('model_architecture', 'resnet18')}")
+            self.logger.info(f"模型创建成功并已加载到设备: {self.device}")
         except Exception as e:
             self.logger.error(f"模型创建失败: {e}")
             raise
@@ -161,10 +174,10 @@ class Trainer:
 
         # 5. 创建学习率调度器
         try:
-            scheduler_config = self.config.get('scheduler')
-            if scheduler_config:
+            scheduler_type = self.config.get('scheduler', 'none')
+            if scheduler_type and scheduler_type.lower() != 'none':
                 self.scheduler = self._create_scheduler()
-                self.logger.info(f"学习率调度器创建成功: {scheduler_config.get('type', 'step')}")
+                self.logger.info(f"学习率调度器创建成功: {scheduler_type}")
         except Exception as e:
             self.logger.warning(f"学习率调度器创建失败: {e}，将不使用调度器")
 
@@ -217,26 +230,35 @@ class Trainer:
         Returns:
             PyTorch学习率调度器
         """
-        scheduler_config = self.config.get('scheduler', {})
-        scheduler_type = scheduler_config.get('type', 'step').lower()
+        scheduler_config = self.config.get('scheduler', 'step')
+
+        # 兼容两种格式：字符串或字典
+        if isinstance(scheduler_config, dict):
+            scheduler_type = scheduler_config.get('type', 'step').lower()
+        else:
+            scheduler_type = str(scheduler_config).lower()
+
+        # 处理 None 值
+        if not scheduler_type or scheduler_type == 'none':
+            raise ValueError("调度器类型为空")
 
         if scheduler_type == 'step':
             return optim.lr_scheduler.StepLR(
                 self.optimizer,
-                step_size=scheduler_config.get('step_size', 30),
-                gamma=scheduler_config.get('gamma', 0.1)
+                step_size=30,
+                gamma=0.1
             )
         elif scheduler_type == 'cosine':
             return optim.lr_scheduler.CosineAnnealingLR(
                 self.optimizer,
-                T_max=scheduler_config.get('T_max', self.total_epochs)
+                T_max=self.total_epochs
             )
-        elif scheduler_type == 'reduce_on_plateau':
+        elif scheduler_type == 'reduce_on_plateau' or scheduler_type == 'reduceonplateau':
             return optim.lr_scheduler.ReduceLROnPlateau(
                 self.optimizer,
                 mode='min',
-                factor=scheduler_config.get('factor', 0.1),
-                patience=scheduler_config.get('patience', 10)
+                factor=0.1,
+                patience=10
             )
         else:
             raise ValueError(f"不支持的调度器: {scheduler_type}")

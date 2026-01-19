@@ -15,6 +15,11 @@ from pathlib import Path
 from datetime import datetime
 from sqlalchemy.orm import Session
 
+
+def debug_log(msg: str, level: str = "INFO"):
+    """调试日志输出"""
+    print(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]} | {level}     | {msg}")
+
 from app.utils.graph_traversal import analyze_graph_structure, Graph
 from app.utils.shape_inference import infer_shapes_from_graph
 from app.services.code_generator_service import CodeGeneratorService
@@ -577,9 +582,9 @@ async def save_code_to_library(
     db: Session = Depends(get_db)
 ):
     """
-    保存代码到模型库
+    保存代码到模型库，并创建可训练的Model记录
 
-    将代码保存到数据库和文件系统。
+    将代码保存到数据库和文件系统，同时创建Model表记录用于训练。
     """
     try:
         code = request.get("code")
@@ -590,7 +595,7 @@ async def save_code_to_library(
         if not code:
             raise HTTPException(400, "代码内容不能为空")
 
-        # 保存到数据库和文件
+        # 保存到数据库和文件（GeneratedCode表）
         saved_code = code_service.create_code(
             db=db,
             name=model_name,
@@ -599,9 +604,55 @@ async def save_code_to_library(
             meta=meta
         )
 
+        # 同时创建Model表记录，用于训练
+        from app.models.model import Model as ModelTable
+        import json
+
+        # 构建graph_json，包含nodes和connections
+        graph_json = {
+            "class_name": model_name,
+            "model_name": model_name,
+            "input_size": meta.get("input_size", 224) if meta else 224,
+            "nodes": meta.get("nodes", []) if meta else [],
+            "connections": meta.get("connections", []) if meta else [],
+        }
+
+        # 检查是否已存在同名模型，更新它而不是创建新的
+        existing_model = db.query(ModelTable).filter(
+            ModelTable.name == model_name,
+            ModelTable.is_active == "active"
+        ).first()
+
+        if existing_model:
+            # 更新现有模型
+            existing_model.graph_json = graph_json
+            existing_model.code_path = saved_code.file_path
+            existing_model.template_tag = template_tag
+            existing_model.updated_at = datetime.now()
+            db.commit()
+            db.refresh(existing_model)
+            model_record = existing_model
+            debug_log(f"更新已存在的Model记录: id={existing_model.id}, name={model_name}")
+        else:
+            # 创建新的Model记录
+            model_record = ModelTable(
+                name=model_name,
+                description=f"自动生成的可训练模型: {model_name}",
+                graph_json=graph_json,
+                code_path=saved_code.file_path,
+                template_tag=template_tag,
+                version="1.0",
+                is_active="active"
+            )
+            db.add(model_record)
+            db.commit()
+            db.refresh(model_record)
+            debug_log(f"创建新的Model记录: id={model_record.id}, name={model_name}")
+
         return {
-            "message": "代码已保存",
-            "id": saved_code.id,
+            "message": "代码已保存并创建可训练模型",
+            "code_id": saved_code.id,
+            "model_id": model_record.id,  # 返回Model表ID，用于创建训练任务
             "filename": saved_code.file_name,
             "filepath": saved_code.file_path
         }
@@ -612,6 +663,57 @@ async def save_code_to_library(
         raise HTTPException(
             status_code=500,
             detail=f"保存代码失败: {str(e)}"
+        )
+
+
+# ==============================
+# 可训练模型管理（Model表）
+# ==============================
+
+@router.get("/trainable")
+async def list_trainable_models(
+    db: Session = Depends(get_db)
+):
+    """
+    获取可训练模型列表
+
+    返回Model表中的所有可训练模型，这些模型包含生成的代码文件。
+    """
+    try:
+        from app.models.model import Model as ModelTable
+
+        models = db.query(ModelTable).filter(
+            ModelTable.is_active == "active"
+        ).order_by(
+            ModelTable.updated_at.desc()
+        ).all()
+
+        result = []
+        for m in models:
+            result.append({
+                "id": m.id,
+                "name": m.name,
+                "description": m.description,
+                "code_path": m.code_path,
+                "version": m.version,
+                "created_at": m.created_at.isoformat() if m.created_at else None,
+                "updated_at": m.updated_at.isoformat() if m.updated_at else None,
+                "has_code": bool(m.code_path),
+                "class_name": m.graph_json.get("class_name", "Model") if m.graph_json else "Model"
+            })
+
+        debug_log(f"获取可训练模型列表: 共{len(result)}个")
+
+        return {
+            "models": result,
+            "total": len(result)
+        }
+
+    except Exception as e:
+        debug_log(f"获取可训练模型列表失败: {e}", "ERROR")
+        raise HTTPException(
+            status_code=500,
+            detail=f"获取模型列表失败: {str(e)}"
         )
 
 

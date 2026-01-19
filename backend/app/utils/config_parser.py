@@ -85,8 +85,9 @@ class TrainingConfigParser:
                 "num_classes": dataset_info.get("num_classes", 80),
                 "image_size": config.get("image_size", 640),
 
-                # 模型配置
-                "model_architecture": model_arch,
+                # 模型配置 - 保留完整的 model_arch 信息，同时提取 architecture 字段用于兼容
+                "model_arch_info": model_arch,  # 保留完整信息，包含 code_path 等关键字段
+                "model_architecture": model_arch.get("architecture", "resnet18") if isinstance(model_arch, dict) else model_arch,
                 "input_channels": 3,
 
                 # Checkpoint配置

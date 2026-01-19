@@ -38,12 +38,6 @@ celery_app.conf.update(
     result_expires=3600,  # 结果保存1小时
     result_extended=True,  # 扩展结果保存
 
-    # 任务路由配置
-    task_routes={
-        'app.tasks.training_tasks.start_training': {'queue': 'training'},
-        'app.tasks.training_tasks.control_training': {'queue': 'control'},
-    },
-
     # 任务重试配置
     task_autoretry_for=(Exception,),  # 所有异常自动重试
     task_retry_max_delay=300,  # 最大重试延迟5分钟
