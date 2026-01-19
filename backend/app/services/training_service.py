@@ -241,6 +241,20 @@ class TrainingService:
                 if action not in valid_actions:
                     raise ValueError(f"无效的操作: {action}")
 
+                # 停止操作：先撤销正在运行的训练任务
+                if action == "stop" and training_run.celery_task_id:
+                    try:
+                        from backend.celery_app import celery_app
+                        celery_app.control.revoke(
+                            training_run.celery_task_id,
+                            terminate=True,
+                            signal='SIGKILL'
+                        )
+                        debug_log(f"已撤销训练任务: {training_run.celery_task_id}", "INFO")
+                    except Exception as e:
+                        debug_log(f"撤销训练任务失败: {e}", "WARNING")
+                        # 继续执行状态更新
+
                 # 提交Celery控制任务
                 from app.tasks.training_tasks import control_training
 
@@ -262,6 +276,9 @@ class TrainingService:
                 elif action == "stop":
                     training_run.status = "stopped"
                     training_run.end_time = datetime.utcnow()
+                    # 计算最终进度
+                    if training_run.total_epochs > 0:
+                        training_run.progress = (training_run.current_epoch / training_run.total_epochs) * 100
                     training_logger.update_status(
                         experiment_id,
                         TrainingStatus.STOPPED

@@ -528,8 +528,10 @@ async def control_training_run(
         # 广播状态变化
         experiment_id = f"exp_{training_id}"
         from app.utils.training_logger import training_logger
-        import asyncio
-        asyncio.create_task(training_logger.broadcast_status(experiment_id, manager))
+        try:
+            await training_logger.broadcast_status(experiment_id, manager)
+        except Exception as e:
+            debug_log(f"广播状态变化失败: {e}", "WARNING")
 
         return TrainingControlResponse(
             success=result["success"],

@@ -82,7 +82,8 @@ interface Experiment {
   totalEpochs: number;
   bestMetric?: number;
   duration: string;
-  accuracy: string; // mAP or Top-1
+  accuracy: string; // 最佳准确率 (best_metric * 100)，来自数据库
+  currentAccuracy?: string; // 当前准确率 (实时变化)，来自 WebSocket
   startedAt: string;
   config?: any;
   device?: string;
@@ -362,26 +363,34 @@ const TrainingMonitor: React.FC = () => {
     try {
       const data = await trainingService.getTrainingRuns({ limit: 50 });
       // 转换为前端Experiment格式
-      const converted: Experiment[] = data.map((item: TrainingRun) => ({
-        id: item.id,
-        name: item.name,
-        description: item.description,
-        task: (item.hyperparams?.task_type || 'classification') as TaskType,
-        modelId: item.model_id,
-        datasetId: item.dataset_id,
-        status: item.status as ExpStatus,
-        progress: item.progress,
-        currentEpoch: item.current_epoch,
-        totalEpochs: item.total_epochs,
-        bestMetric: item.best_metric,
-        duration: '0s',
-        accuracy: item.best_metric ? `${(item.best_metric * 100).toFixed(1)}%` : '0.00%',
-        startedAt: item.start_time ? new Date(item.start_time).toLocaleString() : new Date(item.created_at).toLocaleString(),
-        config: item.hyperparams,
-        device: item.device,
-        startTime: item.start_time,
-        endTime: item.end_time,
-      }));
+      const converted: Experiment[] = data.map((item: TrainingRun) => {
+        // 计算显示的当前 epoch
+        // - 如果未开始训练（queued/pending），显示 0
+        // - 否则显示 current_epoch + 1（1-based）
+        const hasStarted = ['running', 'paused', 'completed', 'failed', 'stopped'].includes(item.status);
+        const displayEpoch = hasStarted ? item.current_epoch + 1 : 0;
+
+        return {
+          id: item.id,
+          name: item.name,
+          description: item.description,
+          task: (item.hyperparams?.task_type || 'classification') as TaskType,
+          modelId: item.model_id,
+          datasetId: item.dataset_id,
+          status: item.status as ExpStatus,
+          progress: item.progress,
+          currentEpoch: displayEpoch,
+          totalEpochs: item.total_epochs,
+          bestMetric: item.best_metric,
+          duration: '0s',
+          accuracy: item.best_metric ? `${(item.best_metric * 100).toFixed(1)}%` : '0.00%',
+          startedAt: item.start_time ? new Date(item.start_time).toLocaleString() : new Date(item.created_at).toLocaleString(),
+          config: item.hyperparams,
+          device: item.device,
+          startTime: item.start_time,
+          endTime: item.end_time,
+        };
+      });
       setExperiments(converted);
     } catch (err) {
       console.error('获取训练任务失败:', err);
@@ -546,12 +555,22 @@ const TrainingMonitor: React.FC = () => {
     });
 
     // 更新实验列表中的对应实验状态
+    // 注意：progress, status 等字段通过定期刷新获取，这里只更新 metrics 相关的字段
     setExperiments(prev => prev.map(exp => {
       if (exp.id === selectedExpId) {
+        // 只有当 progress > 0 时才使用 WebSocket 的 epoch 更新 currentEpoch
+        // 这样可以避免在训练刚开始但 progress 还是 0 时显示 1/10
+        const shouldUpdateEpoch = exp.progress > 0 && (data.epoch ?? -1) >= 0;
+
         return {
           ...exp,
-          accuracy: data.val_acc ? `${(data.val_acc * 100).toFixed(1)}%` : exp.accuracy,
-          currentEpoch: data.epoch || exp.currentEpoch
+          // best_metric 在 WebSocket 消息中，则更新最佳准确率
+          accuracy: (data as any).best_metric !== undefined
+            ? `${(((data as any).best_metric as number) * 100).toFixed(1)}%`
+            : exp.accuracy,
+          // currentAccuracy 表示当前准确率（实时变化）
+          currentAccuracy: data.val_acc ? `${(data.val_acc * 100).toFixed(1)}%` : undefined,
+          currentEpoch: shouldUpdateEpoch ? (data.epoch + 1) : exp.currentEpoch
         };
       }
       return exp;
@@ -633,26 +652,32 @@ const TrainingMonitor: React.FC = () => {
         const data = await trainingService.getTrainingRuns({ limit: 50 });
 
         // 转换为前端Experiment格式
-        const converted: Experiment[] = data.map((item: TrainingRun) => ({
-          id: item.id,
-          name: item.name,
-          description: item.description,
-          task: (item.hyperparams?.task_type || 'classification') as TaskType,
-          modelId: item.model_id,
-          datasetId: item.dataset_id,
-          status: item.status as ExpStatus,
-          progress: item.progress,
-          currentEpoch: item.current_epoch,
-          totalEpochs: item.total_epochs,
-          bestMetric: item.best_metric,
-          duration: '0s',
-          accuracy: item.best_metric ? `${(item.best_metric * 100).toFixed(1)}%` : '0.00%',
-          startedAt: item.start_time ? new Date(item.start_time).toLocaleString() : new Date(item.created_at).toLocaleString(),
-          config: item.hyperparams,
-          device: item.device,
-          startTime: item.start_time,
-          endTime: item.end_time,
-        }));
+        const converted: Experiment[] = data.map((item: TrainingRun) => {
+          // 计算显示的当前 epoch
+          const hasStarted = ['running', 'paused', 'completed', 'failed', 'stopped'].includes(item.status);
+          const displayEpoch = hasStarted ? item.current_epoch + 1 : 0;
+
+          return {
+            id: item.id,
+            name: item.name,
+            description: item.description,
+            task: (item.hyperparams?.task_type || 'classification') as TaskType,
+            modelId: item.model_id,
+            datasetId: item.dataset_id,
+            status: item.status as ExpStatus,
+            progress: item.progress,
+            currentEpoch: displayEpoch,
+            totalEpochs: item.total_epochs,
+            bestMetric: item.best_metric,
+            duration: '0s',
+            accuracy: item.best_metric ? `${(item.best_metric * 100).toFixed(1)}%` : '0.00%',
+            startedAt: item.start_time ? new Date(item.start_time).toLocaleString() : new Date(item.created_at).toLocaleString(),
+            config: item.hyperparams,
+            device: item.device,
+            startTime: item.start_time,
+            endTime: item.end_time,
+          };
+        });
         setExperiments(converted);
 
         // 检查是否还有运行中的实验
@@ -1323,6 +1348,101 @@ const TrainingMonitor: React.FC = () => {
     </div>
   );
 
+  // 定期刷新当前实验的完整信息（详情页面专用）
+  // 用于更新 progress, status 等不在 WebSocket metrics_update 消息中的字段
+  const detailRefreshRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    const refreshExperimentDetail = async () => {
+      if (view !== 'detail' || !selectedExpId) {
+        return;
+      }
+
+      try {
+        const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1';
+        const token = localStorage.getItem('access_token');
+        const response = await fetch(`${baseUrl}/training/${selectedExpId}`, {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          }
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          // 更新实验列表中的对应实验
+          setExperiments(prev => {
+            const updated = prev.map(exp => {
+              if (exp.id === selectedExpId) {
+                // 计算显示的当前 epoch
+                const hasStarted = ['running', 'paused', 'completed', 'failed', 'stopped'].includes(data.status);
+                const displayEpoch = hasStarted ? data.current_epoch + 1 : 0;
+
+                return {
+                  ...exp,
+                  status: data.status,
+                  progress: data.progress,
+                  currentEpoch: displayEpoch,
+                  totalEpochs: data.total_epochs,
+                  bestMetric: data.best_metric,
+                  accuracy: data.best_metric ? `${(data.best_metric * 100).toFixed(1)}%` : exp.accuracy,
+                  endTime: data.end_time
+                };
+              }
+              return exp;
+            });
+
+            // 检查状态是否变为完成/失败，如果是则停止刷新
+            const currentExp = updated.find(e => e.id === selectedExpId);
+            if (currentExp && currentExp.status !== 'running' && currentExp.status !== 'queued' && currentExp.status !== 'paused') {
+              if (detailRefreshRef.current) {
+                clearInterval(detailRefreshRef.current);
+                detailRefreshRef.current = null;
+                console.log(`🔄 [DETAIL] 训练已结束 (${currentExp.status})，停止定期刷新`);
+              }
+            }
+
+            return updated;
+          });
+          console.log(`🔄 [DETAIL] 刷新实验详情: status=${data.status}, progress=${data.progress}`);
+        }
+      } catch (err) {
+        console.error('刷新实验详情失败:', err);
+      }
+    };
+
+    // 清理之前的定时器
+    if (detailRefreshRef.current) {
+      clearInterval(detailRefreshRef.current);
+      detailRefreshRef.current = null;
+    }
+
+    // 只在详情视图运行
+    if (view !== 'detail' || !selectedExpId) {
+      return;
+    }
+
+    // 立即刷新一次
+    refreshExperimentDetail();
+
+    // 检查是否需要定期刷新（只对运行中的任务）
+    const exp = experiments.find(e => e.id === selectedExpId);
+    const shouldRefresh = exp && (exp.status === 'running' || exp.status === 'queued' || exp.status === 'paused');
+
+    if (shouldRefresh) {
+      // 每5秒刷新一次实验详情
+      detailRefreshRef.current = setInterval(refreshExperimentDetail, 5000);
+      console.log('🔄 [DETAIL] 启动实验详情定期刷新（5秒间隔）');
+    }
+
+    return () => {
+      if (detailRefreshRef.current) {
+        clearInterval(detailRefreshRef.current);
+        detailRefreshRef.current = null;
+      }
+    };
+  }, [view, selectedExpId]); // 只依赖 view 和 selectedExpId，避免循环
+
   // 加载历史指标数据（当进入详情页面时总是加载）
   // 同时定期刷新以获取训练过程中的新指标
   const metricsRefreshRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -1390,7 +1510,19 @@ const TrainingMonitor: React.FC = () => {
 
     if (shouldRefresh) {
       // 每5秒刷新一次指标
-      metricsRefreshRef.current = setInterval(loadHistoricalMetrics, 5000);
+      metricsRefreshRef.current = setInterval(() => {
+        loadHistoricalMetrics().then(() => {
+          // 刷新后检查状态，如果已结束则停止
+          const currentExp = experiments.find(e => e.id === selectedExpId);
+          if (currentExp && currentExp.status !== 'running' && currentExp.status !== 'queued' && currentExp.status !== 'paused') {
+            if (metricsRefreshRef.current) {
+              clearInterval(metricsRefreshRef.current);
+              metricsRefreshRef.current = null;
+              console.log(`📊 训练已结束 (${currentExp.status})，停止指标定期刷新`);
+            }
+          }
+        });
+      }, 5000);
       console.log('📊 启动指标定期刷新（5秒间隔）');
     }
 
@@ -1400,7 +1532,7 @@ const TrainingMonitor: React.FC = () => {
         metricsRefreshRef.current = null;
       }
     };
-  }, [view, selectedExpId, experiments]);
+  }, [view, selectedExpId]); // 只依赖 view 和 selectedExpId，避免循环
 
   // --- View 3: Experiment Detail / Monitor ---
   const renderDetail = () => {
@@ -1418,8 +1550,9 @@ const TrainingMonitor: React.FC = () => {
 
     // 构建图表数据 - 只使用realTimeMetrics（WebSocket接收的实时数据）
     // 不再使用随机模拟数据，避免训练完成后曲线变化
+    // 注意：realTimeMetrics 中的 epoch 是 0-based（来自后端），需要转换为 1-based 显示
     const chartData = realTimeMetrics.map(m => ({
-      epoch: m.epoch || 0,
+      epoch: (m.epoch ?? 0) + 1,  // 后端 0-based 转换为前端 1-based
       trainLoss: m.train_loss ?? 0,
       valLoss: m.val_loss ?? 0,
       metric: m.val_acc ?? m.train_acc ?? 0

@@ -144,7 +144,7 @@ class TrainingLogger:
 
             logger.info(f"训练 {experiment_id} 状态更新: {old_status} -> {status}")
 
-        # 更新Redis
+        # 更新Redis状态键
         redis = self.redis_client
         if redis:
             try:
@@ -153,6 +153,22 @@ class TrainingLogger:
                     status,
                     ex=86400
                 )
+
+                # 同时更新Redis会话数据
+                session_data = redis.get(self._get_session_key(experiment_id))
+                if session_data:
+                    session = json.loads(session_data)
+                    session["status"] = status
+                    if status == TrainingStatus.RUNNING and not session.get("started_at"):
+                        session["started_at"] = now
+                    elif status in [TrainingStatus.COMPLETED, TrainingStatus.FAILED, TrainingStatus.STOPPED]:
+                        session["ended_at"] = now
+                    redis.set(
+                        self._get_session_key(experiment_id),
+                        json.dumps(session),
+                        ex=86400
+                    )
+                    logger.info(f"Redis会话状态已更新: {experiment_id}, status={status}")
             except Exception as e:
                 logger.error(f"Redis更新状态失败: {e}")
 
@@ -196,7 +212,8 @@ class TrainingLogger:
         self,
         experiment_id: str,
         epoch: int,
-        metrics: dict
+        metrics: dict,
+        best_metric: float = None
     ):
         """
         添加训练指标
@@ -205,12 +222,16 @@ class TrainingLogger:
             experiment_id: 实验/训练任务ID
             epoch: 当前epoch数
             metrics: 指标字典（包含train_loss, train_acc, val_loss, val_acc等）
+            best_metric: 最佳指标值（可选）
         """
         metrics_entry = {
             "epoch": epoch,
             "timestamp": datetime.utcnow().isoformat() + "Z",
             **metrics
         }
+        # 添加最佳指标（如果提供）
+        if best_metric is not None:
+            metrics_entry["best_metric"] = best_metric
 
         # 内存存储
         if experiment_id in self.training_sessions:
@@ -218,17 +239,27 @@ class TrainingLogger:
             session["metrics"].append(metrics_entry)
             session["current_epoch"] = epoch
 
-        # Redis存储 - 使用List存储每个epoch的指标
+        # Redis存储
         redis = self.redis_client
         if redis:
             try:
+                # 存储指标到列表
                 key = self._get_metrics_key(experiment_id)
-                # 将指标作为JSON字符串推入列表
                 redis.rpush(key, json.dumps(metrics_entry))
-                # 只保留最新1000条
                 redis.ltrim(key, -1000, -1)
-                # 设置过期时间
-                redis.expire(key, 86400)  # 24小时
+                redis.expire(key, 86400)
+
+                # 更新会话数据中的current_epoch
+                session_data = redis.get(self._get_session_key(experiment_id))
+                if session_data:
+                    session = json.loads(session_data)
+                    session["current_epoch"] = epoch
+                    redis.set(
+                        self._get_session_key(experiment_id),
+                        json.dumps(session),
+                        ex=86400
+                    )
+
                 logger.debug(f"Redis存储指标: {experiment_id}, epoch={epoch}")
             except Exception as e:
                 logger.error(f"Redis存储指标失败: {e}")
@@ -411,25 +442,42 @@ class TrainingLogger:
             experiment_id: 实验/训练任务ID
             manager: WebSocket连接管理器
         """
-        # 尝试从Redis获取状态
-        status = TrainingStatus.RUNNING
+        # 尝试从Redis获取会话信息
         redis = self.redis_client
+
+        # 默认值
+        status = TrainingStatus.RUNNING
+        current_epoch = 0
+        total_epochs = 0
+        started_at = None
+        ended_at = None
+
+        # 优先从Redis获取
         if redis:
             try:
+                # 获取状态
                 status_data = redis.get(self._get_status_key(experiment_id))
                 if status_data:
                     status = status_data
-            except:
-                pass
+
+                # 获取会话信息
+                session_data = redis.get(self._get_session_key(experiment_id))
+                if session_data:
+                    session = json.loads(session_data)
+                    current_epoch = session.get("current_epoch", 0)
+                    total_epochs = session.get("total_epochs", 0)
+                    started_at = session.get("started_at")
+                    ended_at = session.get("ended_at")
+            except Exception as e:
+                logger.error(f"从Redis获取状态信息失败: {e}")
 
         # 降级到内存
-        if experiment_id in self.training_sessions:
+        if not current_epoch and experiment_id in self.training_sessions:
             session = self.training_sessions[experiment_id]
-            current_epoch = session["current_epoch"]
-            total_epochs = session["total_epochs"]
-        else:
-            current_epoch = 0
-            total_epochs = 0
+            current_epoch = session.get("current_epoch", 0)
+            total_epochs = session.get("total_epochs", 0)
+            started_at = session.get("started_at")
+            ended_at = session.get("ended_at")
 
         await manager.send_training_update(experiment_id, {
             "type": "status_change",
@@ -437,11 +485,12 @@ class TrainingLogger:
                 "status": status,
                 "current_epoch": current_epoch,
                 "total_epochs": total_epochs,
-                "started_at": None,
-                "ended_at": None,
+                "started_at": started_at,
+                "ended_at": ended_at,
                 "message": f"训练状态已更新为: {status}"
             }
         })
+        logger.info(f"[WS_BROADCAST] 广播状态变化: experiment_id={experiment_id}, status={status}")
 
 
 # 全局训练日志收集器实例

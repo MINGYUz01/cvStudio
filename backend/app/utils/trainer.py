@@ -322,11 +322,12 @@ class Trainer:
                 # 执行一个epoch
                 metrics = self._train_epoch(epoch)
 
-                # 收集指标
+                # 收集指标（包含最佳指标）
                 training_logger.add_metrics(
                     self.experiment_id,
                     epoch,
-                    metrics
+                    metrics,
+                    best_metric=self.best_metric
                 )
 
                 # 创建异步事件循环以广播
@@ -336,10 +337,11 @@ class Trainer:
                     loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(loop)
 
-                # 广播指标更新
+                # 广播指标更新（包含最佳指标）
                 metrics_entry = {
                     "epoch": epoch,
                     "timestamp": datetime.utcnow().isoformat(),
+                    "best_metric": self.best_metric,  # 添加最佳指标
                     **metrics
                 }
                 loop.run_until_complete(
@@ -365,7 +367,7 @@ class Trainer:
 
             result = {
                 "status": "completed",
-                "final_epoch": self.current_epoch + 1,
+                "final_epoch": self.current_epoch + 1,  # 显示用
                 "best_metric": self.best_metric,
                 "duration": duration
             }
@@ -382,7 +384,8 @@ class Trainer:
                         training_run.status = "completed"
                         training_run.end_time = end_time
                         training_run.progress = 100.0
-                        training_run.current_epoch = self.current_epoch + 1
+                        # 保持 0-based，让前端负责转换为 1-based 显示
+                        training_run.current_epoch = self.current_epoch
                         training_run.best_metric = self.best_metric
                         db.commit()
                         self.logger.info(f"数据库状态已更新为completed: id={training_run_id}, best_metric={self.best_metric:.4f}")
@@ -534,6 +537,17 @@ class Trainer:
             "train_acc": train_accuracy,
             **val_metrics
         }
+
+        # 更新最佳指标（每个epoch都检查）
+        task_type = self.config.get("task_type", "classification")
+        if task_type == "detection":
+            current_metric = metrics.get("val_acc", 0.0)
+        else:
+            current_metric = metrics.get("val_acc", 0.0)
+
+        if current_metric > self.best_metric:
+            self.best_metric = current_metric
+            self.logger.info(f"新最佳指标! Val Acc: {current_metric:.4f}")
 
         # 更新学习率调度器
         if self.scheduler is not None:
