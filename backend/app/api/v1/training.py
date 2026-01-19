@@ -12,6 +12,7 @@ import sys
 from app.database import get_db
 from app.services.training_service import TrainingService
 from app.api.websocket import manager
+from app.utils.training_logger import training_logger
 from app.schemas.training import (
     TrainingRunCreate,
     TrainingRunResponse,
@@ -47,11 +48,11 @@ def debug_log(msg: str, level: str = "INFO"):
 debug_log("训练API模块已加载")
 
 
-@router.get("/", response_model=List[ExperimentListItem])
+@router.get("/")
 async def list_training_runs(
     status: Optional[str] = None,
-    page: int = 1,
-    page_size: int = 20,
+    skip: int = 0,
+    limit: int = 50,
     db: Session = Depends(get_db)
 ):
     """
@@ -59,39 +60,52 @@ async def list_training_runs(
 
     Args:
         status: 状态过滤（可选）
-        page: 页码（从1开始）
-        page_size: 每页数量
+        skip: 跳过记录数
+        limit: 限制返回数量
         db: 数据库会话
 
     Returns:
-        训练任务列表
+        训练任务列表（完整TrainingRun格式）
     """
     try:
-        skip = (page - 1) * page_size
         training_runs = training_service.get_training_runs(
             db=db,
             skip=skip,
-            limit=page_size,
+            limit=limit,
             status=status
         )
 
-        # 转换为简化的响应格式
-        result = [
-            ExperimentListItem(
-                id=run.id,
-                name=run.name,
-                status=run.status,
-                task_type=run.hyperparams.get("task_type") if run.hyperparams else None,
-                progress=run.progress,
-                current_epoch=run.current_epoch,
-                total_epochs=run.total_epochs,
-                best_metric=run.best_metric,
-                device=run.device,
-                start_time=run.start_time,
-                created_at=run.created_at
-            )
-            for run in training_runs
-        ]
+        debug_log(f"获取到 {len(training_runs)} 条训练任务")
+
+        # 直接返回TrainingRun对象列表（会被序列化为JSON）
+        result = []
+        for run in training_runs:
+            result.append({
+                "id": run.id,
+                "name": run.name,
+                "description": run.description,
+                "model_id": run.model_id,
+                "dataset_id": run.dataset_id,
+                "hyperparams": run.hyperparams,
+                "status": run.status,
+                "progress": run.progress,
+                "current_epoch": run.current_epoch,
+                "total_epochs": run.total_epochs,
+                "best_metric": run.best_metric,
+                "device": run.device,
+                "log_file": run.log_file,
+                "error_message": run.error_message,
+                "start_time": run.start_time.isoformat() if run.start_time else None,
+                "end_time": run.end_time.isoformat() if run.end_time else None,
+                "created_at": run.created_at.isoformat() if run.created_at else None,
+                "updated_at": run.updated_at.isoformat() if run.updated_at else None,
+            })
+
+        # 打印第一个任务的状态用于调试
+        if result:
+            first = result[0]
+            debug_log(f"第一个任务: id={first['id']}, status={first['status']}, progress={first['progress']}, "
+                      f"epoch={first['current_epoch']}/{first['total_epochs']}, best_metric={first['best_metric']}")
 
         return result
 
@@ -150,7 +164,7 @@ async def create_training_run(
         )
 
 
-@router.get("/{training_id}", response_model=TrainingRunResponse)
+@router.get("/{training_id}")
 async def get_training_run(
     training_id: int,
     db: Session = Depends(get_db)
@@ -163,7 +177,7 @@ async def get_training_run(
         db: 数据库会话
 
     Returns:
-        训练任务详情
+        训练任务详情（完整TrainingRun格式）
     """
     debug_log(f"获取训练任务详情: id={training_id}")
     training_run = training_service.get_training_run(db, training_id)
@@ -175,7 +189,59 @@ async def get_training_run(
             detail=f"训练任务不存在: {training_id}"
         )
 
-    return training_run
+    # 添加调试日志
+    debug_log(f"训练任务状态: status={training_run.status}, progress={training_run.progress}, "
+              f"current_epoch={training_run.current_epoch}, best_metric={training_run.best_metric}")
+
+    # 返回完整格式
+    return {
+        "id": training_run.id,
+        "name": training_run.name,
+        "description": training_run.description,
+        "model_id": training_run.model_id,
+        "dataset_id": training_run.dataset_id,
+        "hyperparams": training_run.hyperparams,
+        "status": training_run.status,
+        "progress": training_run.progress,
+        "current_epoch": training_run.current_epoch,
+        "total_epochs": training_run.total_epochs,
+        "best_metric": training_run.best_metric,
+        "device": training_run.device,
+        "log_file": training_run.log_file,
+        "error_message": training_run.error_message,
+        "start_time": training_run.start_time.isoformat() if training_run.start_time else None,
+        "end_time": training_run.end_time.isoformat() if training_run.end_time else None,
+        "created_at": training_run.created_at.isoformat() if training_run.created_at else None,
+        "updated_at": training_run.updated_at.isoformat() if training_run.updated_at else None,
+    }
+
+
+@router.get("/{training_id}/metrics")
+async def get_training_metrics(
+    training_id: int,
+    limit: int = 100,
+    db: Session = Depends(get_db)
+):
+    """
+    获取训练任务的历史指标数据
+
+    Args:
+        training_id: 训练任务ID
+        limit: 返回的指标条数限制
+        db: 数据库会话
+
+    Returns:
+        指标数据列表
+    """
+    experiment_id = f"exp_{training_id}"
+    metrics = training_logger.get_metrics(experiment_id, limit)
+
+    return {
+        "experiment_id": experiment_id,
+        "training_id": training_id,
+        "metrics": metrics,
+        "count": len(metrics)
+    }
 
 
 @router.post("/{training_id}/start")

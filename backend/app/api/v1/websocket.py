@@ -131,6 +131,7 @@ async def websocket_training_logs(
 
     # 订阅训练任务更新
     manager.subscribe_training(client_id, experiment_id)
+    logger.info(f"[WS_TRAINING] 客户端 {client_id} 订阅训练任务 {experiment_id}")
 
     try:
         # 发送连接确认消息
@@ -152,7 +153,7 @@ async def websocket_training_logs(
             data = await websocket.receive_text()
 
             # 处理客户端消息
-            logger.debug(f"从客户端 {client_id} 收到消息: {data}")
+            logger.info(f"[WS_TRAINING] 从客户端 {client_id} 收到消息: {data}")
 
     except WebSocketDisconnect:
         logger.info(f"客户端 {client_id} 主动断开训练日志流连接 (实验: {experiment_id})")

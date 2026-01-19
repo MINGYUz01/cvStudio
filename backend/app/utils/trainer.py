@@ -14,6 +14,8 @@ from loguru import logger
 
 from app.utils.training_logger import training_logger, TrainingStatus
 from app.api.websocket import manager
+from app.database import SessionLocal
+from app.models.training import TrainingRun
 
 # 导入训练组件
 from app.utils.data_loaders.factory import DataLoaderFactory
@@ -276,6 +278,24 @@ class Trainer:
         try:
             self.logger.info(f"开始训练: {self.experiment_id}")
 
+            # 更新数据库状态为running
+            try:
+                training_run_id = int(self.experiment_id.split('_')[1])
+                db = SessionLocal()
+                try:
+                    training_run = db.query(TrainingRun).filter(
+                        TrainingRun.id == training_run_id
+                    ).first()
+                    if training_run:
+                        training_run.status = "running"
+                        training_run.start_time = datetime.utcnow()
+                        db.commit()
+                        self.logger.info(f"数据库状态已更新为running: id={training_run_id}")
+                finally:
+                    db.close()
+            except Exception as e:
+                self.logger.error(f"更新数据库运行状态失败: {e}")
+
             # 初始化训练组件（在第一个epoch时）
             if not self._initialized:
                 self._setup_training()
@@ -350,6 +370,27 @@ class Trainer:
                 "duration": duration
             }
 
+            # 更新数据库中的训练状态
+            try:
+                training_run_id = int(self.experiment_id.split('_')[1])
+                db = SessionLocal()
+                try:
+                    training_run = db.query(TrainingRun).filter(
+                        TrainingRun.id == training_run_id
+                    ).first()
+                    if training_run:
+                        training_run.status = "completed"
+                        training_run.end_time = end_time
+                        training_run.progress = 100.0
+                        training_run.current_epoch = self.current_epoch + 1
+                        training_run.best_metric = self.best_metric
+                        db.commit()
+                        self.logger.info(f"数据库状态已更新为completed: id={training_run_id}, best_metric={self.best_metric:.4f}")
+                finally:
+                    db.close()
+            except Exception as e:
+                self.logger.error(f"更新数据库完成状态失败: {e}")
+
             # 更新状态为完成
             training_logger.update_status(
                 self.experiment_id,
@@ -380,6 +421,25 @@ class Trainer:
 
         except Exception as e:
             self.logger.error(f"训练失败: {e}")
+
+            # 更新数据库中的训练状态
+            try:
+                training_run_id = int(self.experiment_id.split('_')[1])
+                db = SessionLocal()
+                try:
+                    training_run = db.query(TrainingRun).filter(
+                        TrainingRun.id == training_run_id
+                    ).first()
+                    if training_run:
+                        training_run.status = "failed"
+                        training_run.end_time = datetime.utcnow()
+                        training_run.error_message = str(e)
+                        db.commit()
+                finally:
+                    db.close()
+            except Exception as db_error:
+                self.logger.error(f"更新数据库失败状态失败: {db_error}")
+
             training_logger.update_status(
                 self.experiment_id,
                 TrainingStatus.FAILED
@@ -670,9 +730,26 @@ class Trainer:
         Args:
             progress: 进度百分比（0-100）
         """
-        # 更新数据库（实际使用时需要实现）
-        # 这里只记录日志
-        self.logger.debug(f"训练进度: {progress:.1f}%")
+        # 从experiment_id提取training_run_id (格式: exp_1)
+        try:
+            training_run_id = int(self.experiment_id.split('_')[1])
+            db = SessionLocal()
+            try:
+                training_run = db.query(TrainingRun).filter(
+                    TrainingRun.id == training_run_id
+                ).first()
+                if training_run:
+                    training_run.progress = progress
+                    training_run.current_epoch = self.current_epoch
+                    training_run.best_metric = self.best_metric
+                    db.commit()
+                    self.logger.info(f"数据库已更新: progress={progress:.1f}%, epoch={self.current_epoch}, best_metric={self.best_metric:.4f}")
+                else:
+                    self.logger.warning(f"未找到training_run: id={training_run_id}")
+            finally:
+                db.close()
+        except Exception as e:
+            self.logger.error(f"更新数据库进度失败: {e}")
 
         # 广播状态更新（包含进度信息）
         try:

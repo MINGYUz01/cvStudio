@@ -3,7 +3,7 @@
  * 封装WebSocket连接，提供自动重连和消息分发功能
  */
 
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 
 // WebSocket消息类型定义
 export type WSMessage =
@@ -145,15 +145,25 @@ export const useWebSocket = (
   const connect = useCallback(() => {
     // 如果未启用连接，直接返回
     if (!enabled) {
+      console.log('🔌 [WS] 连接被禁用，跳过连接');
       return;
     }
 
     if (socketRef.current?.readyState === WebSocket.OPEN) {
+      console.log('🔌 [WS] 已连接，跳过重复连接');
       return;
     }
 
     setConnecting(true);
     setError(null);
+
+    console.log('🔌 [WS] 正在连接到:', url);
+    console.log('🔌 [WS] 回调状态:', {
+      hasOnMessage: !!onMessage,
+      hasOnLog: !!onLog,
+      hasOnMetrics: !!onMetrics,
+      hasOnStatusChange: !!onStatusChange
+    });
 
     try {
       const socket = new WebSocket(url);
@@ -172,6 +182,9 @@ export const useWebSocket = (
         try {
           const message: WSMessage = JSON.parse(event.data);
 
+          // 调试：显示收到的所有消息
+          console.log('📨 [WS] 收到消息:', message.type, message.data);
+
           // 调用通用回调
           if (onMessage) {
             onMessage(message);
@@ -180,15 +193,19 @@ export const useWebSocket = (
           // 根据消息类型分发到特定回调
           switch (message.type) {
             case 'system_stats':
+              console.log('📨 [WS] 分发到 onSystemStats');
               onSystemStats?.(message.data);
               break;
             case 'log':
+              console.log('📨 [WS] 分发到 onLog');
               onLog?.(message.data);
               break;
             case 'metrics_update':
+              console.log('📨 [WS] 分发到 onMetrics, data=', message.data);
               onMetrics?.(message.data);
               break;
             case 'status_change':
+              console.log('📨 [WS] 分发到 onStatusChange');
               onStatusChange?.(message.data);
               break;
             case 'connection_established':
@@ -298,10 +315,16 @@ export const useWebSocket = (
  * 系统状态WebSocket Hook
  */
 export const useSystemStatsWS = (options?: UseWebSocketOptions) => {
-  const wsUrl = `ws://localhost:8000/api/v1/ws/system?client_id=${Date.now()}`;
-  return useWebSocket(wsUrl, {
-    ...options,
-  });
+  // 使用useRef保持client_id稳定，避免频繁重连
+  const clientIdRef = useRef<string>();
+  if (!clientIdRef.current) {
+    clientIdRef.current = `sys_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  }
+
+  const wsUrl = `ws://localhost:8000/api/v1/ws/system?client_id=${clientIdRef.current}`;
+
+  // 直接传递options，不用useMemo避免创建新对象
+  return useWebSocket(wsUrl, options || {});
 };
 
 /**
@@ -310,13 +333,21 @@ export const useSystemStatsWS = (options?: UseWebSocketOptions) => {
  */
 export const useTrainingLogsWS = (
   experimentId: string,
-  options?: UseWebSocketOptions
+  options: UseWebSocketOptions = {}
 ) => {
-  const wsUrl = `ws://localhost:8000/api/v1/ws/training/${experimentId}?client_id=${Date.now()}`;
-  return useWebSocket(wsUrl, {
-    ...options,
-    enabled: !!experimentId, // experimentId 为空时不启用连接
-  });
+  // 使用useRef保持client_id稳定，避免频繁重连
+  const clientIdRef = useRef<string>();
+  if (!clientIdRef.current) {
+    clientIdRef.current = `train_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  }
+
+  const wsUrl = experimentId
+    ? `ws://localhost:8000/api/v1/ws/training/${experimentId}?client_id=${clientIdRef.current}`
+    : '';
+
+  // 直接传递options，不用useMemo避免创建新对象
+  // enabled 由 shouldConnectWS 控制（在调用方已经处理）
+  return useWebSocket(wsUrl, experimentId ? options : { ...options, enabled: false });
 };
 
 export default useWebSocket;

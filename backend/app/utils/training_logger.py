@@ -1,6 +1,7 @@
 """
 训练日志收集器
 收集训练过程中的日志、指标并通过WebSocket实时推送
+使用Redis进行跨进程数据共享
 """
 
 import asyncio
@@ -9,6 +10,14 @@ from datetime import datetime
 from typing import Dict, List, Optional, Callable
 from enum import Enum
 import json
+
+try:
+    import redis
+    from app.core.config import settings
+    REDIS_AVAILABLE = True
+except ImportError:
+    REDIS_AVAILABLE = False
+    logger.warning("Redis不可用，训练指标将只在内存中存储（跨进程不可共享）")
 
 
 class TrainingStatus(str, Enum):
@@ -22,11 +31,15 @@ class TrainingStatus(str, Enum):
 
 
 class TrainingLogger:
-    """训练日志收集器"""
+    """训练日志收集器 - 支持Redis跨进程共享"""
+
+    METRICS_KEY_PREFIX = "training:metrics:"
+    STATUS_KEY_PREFIX = "training:status:"
+    LOGS_KEY_PREFIX = "training:logs:"
+    SESSION_KEY_PREFIX = "training:session:"
 
     def __init__(self):
-        # 存储所有训练任务的日志缓冲区
-        # {experiment_id: {"logs": [], "metrics": [], "status": TrainingStatus}}
+        # 内存缓存（用于本地访问）
         self.training_sessions: Dict[str, dict] = {}
 
         # 日志级别过滤
@@ -34,6 +47,38 @@ class TrainingLogger:
 
         # 每个训练任务保留的最大日志条数
         self.max_logs = 1000
+
+        # Redis客户端（延迟初始化）
+        self._redis_client = None
+
+    @property
+    def redis_client(self):
+        """延迟初始化Redis客户端"""
+        if self._redis_client is None and REDIS_AVAILABLE:
+            try:
+                self._redis_client = redis.from_url(
+                    settings.REDIS_URL,
+                    decode_responses=True
+                )
+                # 测试连接
+                self._redis_client.ping()
+                logger.info("Redis连接成功，训练指标将跨进程共享")
+            except Exception as e:
+                logger.warning(f"Redis连接失败: {e}，训练指标将只在内存中存储")
+                self._redis_client = False  # 标记为失败
+        return self._redis_client if self._redis_client is not False else None
+
+    def _get_metrics_key(self, experiment_id: str) -> str:
+        return f"{self.METRICS_KEY_PREFIX}{experiment_id}"
+
+    def _get_status_key(self, experiment_id: str) -> str:
+        return f"{self.STATUS_KEY_PREFIX}{experiment_id}"
+
+    def _get_logs_key(self, experiment_id: str) -> str:
+        return f"{self.LOGS_KEY_PREFIX}{experiment_id}"
+
+    def _get_session_key(self, experiment_id: str) -> str:
+        return f"{self.SESSION_KEY_PREFIX}{experiment_id}"
 
     def create_session(self, experiment_id: str, config: dict = None):
         """
@@ -43,10 +88,7 @@ class TrainingLogger:
             experiment_id: 实验/训练任务ID
             config: 训练配置信息
         """
-        if experiment_id in self.training_sessions:
-            logger.warning(f"训练会话 {experiment_id} 已存在，将被覆盖")
-
-        self.training_sessions[experiment_id] = {
+        session_data = {
             "logs": [],
             "metrics": [],
             "status": TrainingStatus.QUEUED,
@@ -58,6 +100,26 @@ class TrainingLogger:
             "total_epochs": 0
         }
 
+        # 内存存储
+        if experiment_id in self.training_sessions:
+            logger.warning(f"训练会话 {experiment_id} 已存在，将被覆盖")
+        self.training_sessions[experiment_id] = session_data
+
+        # Redis存储
+        redis = self.redis_client
+        if redis:
+            try:
+                redis.set(
+                    self._get_session_key(experiment_id),
+                    json.dumps(session_data),
+                    ex=86400  # 24小时过期
+                )
+                # 初始化空的指标列表
+                redis.delete(self._get_metrics_key(experiment_id))
+                logger.info(f"创建训练会话（Redis）: {experiment_id}")
+            except Exception as e:
+                logger.error(f"Redis创建会话失败: {e}")
+
         logger.info(f"创建训练会话: {experiment_id}")
 
     def update_status(self, experiment_id: str, status: TrainingStatus):
@@ -68,20 +130,31 @@ class TrainingLogger:
             experiment_id: 实验/训练任务ID
             status: 新的训练状态
         """
-        if experiment_id not in self.training_sessions:
-            logger.warning(f"训练会话 {experiment_id} 不存在")
-            return
+        now = datetime.utcnow().isoformat() + "Z"
 
-        old_status = self.training_sessions[experiment_id]["status"]
-        self.training_sessions[experiment_id]["status"] = status
+        # 更新内存
+        if experiment_id in self.training_sessions:
+            old_status = self.training_sessions[experiment_id]["status"]
+            self.training_sessions[experiment_id]["status"] = status
 
-        # 设置时间戳
-        if status == TrainingStatus.RUNNING and not self.training_sessions[experiment_id]["started_at"]:
-            self.training_sessions[experiment_id]["started_at"] = datetime.utcnow().isoformat() + "Z"
-        elif status in [TrainingStatus.COMPLETED, TrainingStatus.FAILED, TrainingStatus.STOPPED]:
-            self.training_sessions[experiment_id]["ended_at"] = datetime.utcnow().isoformat() + "Z"
+            if status == TrainingStatus.RUNNING and not self.training_sessions[experiment_id]["started_at"]:
+                self.training_sessions[experiment_id]["started_at"] = now
+            elif status in [TrainingStatus.COMPLETED, TrainingStatus.FAILED, TrainingStatus.STOPPED]:
+                self.training_sessions[experiment_id]["ended_at"] = now
 
-        logger.info(f"训练 {experiment_id} 状态更新: {old_status} -> {status}")
+            logger.info(f"训练 {experiment_id} 状态更新: {old_status} -> {status}")
+
+        # 更新Redis
+        redis = self.redis_client
+        if redis:
+            try:
+                redis.set(
+                    self._get_status_key(experiment_id),
+                    status,
+                    ex=86400
+                )
+            except Exception as e:
+                logger.error(f"Redis更新状态失败: {e}")
 
     def add_log(
         self,
@@ -99,10 +172,6 @@ class TrainingLogger:
             message: 日志消息
             source: 日志来源
         """
-        if experiment_id not in self.training_sessions:
-            logger.warning(f"训练会话 {experiment_id} 不存在，日志将被忽略")
-            return
-
         # 验证日志级别
         if level.upper() not in self.log_levels:
             level = "INFO"
@@ -114,13 +183,12 @@ class TrainingLogger:
             "timestamp": datetime.utcnow().isoformat() + "Z"
         }
 
-        # 添加到日志缓冲区
-        session = self.training_sessions[experiment_id]
-        session["logs"].append(log_entry)
-
-        # 限制日志数量
-        if len(session["logs"]) > self.max_logs:
-            session["logs"] = session["logs"][-self.max_logs:]
+        # 内存存储
+        if experiment_id in self.training_sessions:
+            session = self.training_sessions[experiment_id]
+            session["logs"].append(log_entry)
+            if len(session["logs"]) > self.max_logs:
+                session["logs"] = session["logs"][-self.max_logs:]
 
         return log_entry
 
@@ -138,25 +206,34 @@ class TrainingLogger:
             epoch: 当前epoch数
             metrics: 指标字典（包含train_loss, train_acc, val_loss, val_acc等）
         """
-        if experiment_id not in self.training_sessions:
-            logger.warning(f"训练会话 {experiment_id} 不存在，指标将被忽略")
-            return
-
         metrics_entry = {
             "epoch": epoch,
             "timestamp": datetime.utcnow().isoformat() + "Z",
             **metrics
         }
 
-        # 添加到指标缓冲区
-        session = self.training_sessions[experiment_id]
-        session["metrics"].append(metrics_entry)
+        # 内存存储
+        if experiment_id in self.training_sessions:
+            session = self.training_sessions[experiment_id]
+            session["metrics"].append(metrics_entry)
+            session["current_epoch"] = epoch
 
-        # 更新当前epoch
-        session["current_epoch"] = epoch
+        # Redis存储 - 使用List存储每个epoch的指标
+        redis = self.redis_client
+        if redis:
+            try:
+                key = self._get_metrics_key(experiment_id)
+                # 将指标作为JSON字符串推入列表
+                redis.rpush(key, json.dumps(metrics_entry))
+                # 只保留最新1000条
+                redis.ltrim(key, -1000, -1)
+                # 设置过期时间
+                redis.expire(key, 86400)  # 24小时
+                logger.debug(f"Redis存储指标: {experiment_id}, epoch={epoch}")
+            except Exception as e:
+                logger.error(f"Redis存储指标失败: {e}")
 
         logger.debug(f"训练 {experiment_id} Epoch {epoch} 指标: {metrics}")
-
         return metrics_entry
 
     def get_logs(
@@ -176,17 +253,14 @@ class TrainingLogger:
         Returns:
             日志列表
         """
-        if experiment_id not in self.training_sessions:
-            return []
+        # 优先从内存获取
+        if experiment_id in self.training_sessions:
+            logs = self.training_sessions[experiment_id]["logs"]
+            if level:
+                logs = [log for log in logs if log["level"] == level.upper()]
+            return logs[-limit:]
 
-        logs = self.training_sessions[experiment_id]["logs"]
-
-        # 按级别过滤
-        if level:
-            logs = [log for log in logs if log["level"] == level.upper()]
-
-        # 限制数量并返回最新的日志
-        return logs[-limit:]
+        return []
 
     def get_metrics(
         self,
@@ -194,7 +268,7 @@ class TrainingLogger:
         limit: int = 100
     ) -> List[dict]:
         """
-        获取训练指标
+        获取训练指标 - 优先从Redis获取
 
         Args:
             experiment_id: 实验/训练任务ID
@@ -203,11 +277,26 @@ class TrainingLogger:
         Returns:
             指标列表
         """
-        if experiment_id not in self.training_sessions:
-            return []
+        # 先尝试从Redis获取
+        redis = self.redis_client
+        if redis:
+            try:
+                key = self._get_metrics_key(experiment_id)
+                # 获取最新的N条指标
+                metrics_data = redis.lrange(key, -limit, -1)
+                if metrics_data:
+                    metrics = [json.loads(data) for data in metrics_data]
+                    logger.debug(f"从Redis获取指标: {experiment_id}, count={len(metrics)}")
+                    return metrics
+            except Exception as e:
+                logger.error(f"从Redis获取指标失败: {e}")
 
-        metrics = self.training_sessions[experiment_id]["metrics"]
-        return metrics[-limit:]
+        # 降级到内存
+        if experiment_id in self.training_sessions:
+            metrics = self.training_sessions[experiment_id]["metrics"]
+            return metrics[-limit:]
+
+        return []
 
     def get_session_info(self, experiment_id: str) -> Optional[dict]:
         """
@@ -219,23 +308,33 @@ class TrainingLogger:
         Returns:
             会话信息字典
         """
-        if experiment_id not in self.training_sessions:
-            return None
+        # 优先从Redis获取
+        redis = self.redis_client
+        if redis:
+            try:
+                session_data = redis.get(self._get_session_key(experiment_id))
+                if session_data:
+                    return json.loads(session_data)
+            except Exception as e:
+                logger.error(f"从Redis获取会话失败: {e}")
 
-        session = self.training_sessions[experiment_id]
+        # 降级到内存
+        if experiment_id in self.training_sessions:
+            session = self.training_sessions[experiment_id]
+            return {
+                "experiment_id": experiment_id,
+                "status": session["status"],
+                "config": session["config"],
+                "created_at": session["created_at"],
+                "started_at": session["started_at"],
+                "ended_at": session["ended_at"],
+                "current_epoch": session["current_epoch"],
+                "total_epochs": session["total_epochs"],
+                "log_count": len(session["logs"]),
+                "metrics_count": len(session["metrics"])
+            }
 
-        return {
-            "experiment_id": experiment_id,
-            "status": session["status"],
-            "config": session["config"],
-            "created_at": session["created_at"],
-            "started_at": session["started_at"],
-            "ended_at": session["ended_at"],
-            "current_epoch": session["current_epoch"],
-            "total_epochs": session["total_epochs"],
-            "log_count": len(session["logs"]),
-            "metrics_count": len(session["metrics"])
-        }
+        return None
 
     def delete_session(self, experiment_id: str):
         """
@@ -244,9 +343,21 @@ class TrainingLogger:
         Args:
             experiment_id: 实验/训练任务ID
         """
+        # 内存清理
         if experiment_id in self.training_sessions:
             del self.training_sessions[experiment_id]
-            logger.info(f"删除训练会话: {experiment_id}")
+
+        # Redis清理
+        redis = self.redis_client
+        if redis:
+            try:
+                redis.delete(self._get_session_key(experiment_id))
+                redis.delete(self._get_metrics_key(experiment_id))
+                redis.delete(self._get_status_key(experiment_id))
+            except Exception as e:
+                logger.error(f"Redis删除会话失败: {e}")
+
+        logger.info(f"删除训练会话: {experiment_id}")
 
     async def broadcast_log(
         self,
@@ -281,10 +392,12 @@ class TrainingLogger:
             metrics_entry: 指标条目
             manager: WebSocket连接管理器
         """
+        logger.info(f"[WS_BROADCAST] 广播训练指标: experiment_id={experiment_id}, epoch={metrics_entry.get('epoch')}, metrics={metrics_entry}")
         await manager.send_training_update(experiment_id, {
             "type": "metrics_update",
             "data": metrics_entry
         })
+        logger.info(f"[WS_BROADCAST] 指标广播完成: experiment_id={experiment_id}")
 
     async def broadcast_status(
         self,
@@ -298,17 +411,35 @@ class TrainingLogger:
             experiment_id: 实验/训练任务ID
             manager: WebSocket连接管理器
         """
-        session = self.training_sessions[experiment_id]
+        # 尝试从Redis获取状态
+        status = TrainingStatus.RUNNING
+        redis = self.redis_client
+        if redis:
+            try:
+                status_data = redis.get(self._get_status_key(experiment_id))
+                if status_data:
+                    status = status_data
+            except:
+                pass
+
+        # 降级到内存
+        if experiment_id in self.training_sessions:
+            session = self.training_sessions[experiment_id]
+            current_epoch = session["current_epoch"]
+            total_epochs = session["total_epochs"]
+        else:
+            current_epoch = 0
+            total_epochs = 0
 
         await manager.send_training_update(experiment_id, {
             "type": "status_change",
             "data": {
-                "status": session["status"],
-                "current_epoch": session["current_epoch"],
-                "total_epochs": session["total_epochs"],
-                "started_at": session["started_at"],
-                "ended_at": session["ended_at"],
-                "message": f"训练状态已更新为: {session['status']}"
+                "status": status,
+                "current_epoch": current_epoch,
+                "total_epochs": total_epochs,
+                "started_at": None,
+                "ended_at": None,
+                "message": f"训练状态已更新为: {status}"
             }
         })
 

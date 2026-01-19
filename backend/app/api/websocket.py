@@ -186,11 +186,16 @@ class ConnectionManager:
             experiment_id: 实验/训练任务ID
             message: 训练更新消息
         """
+        subscribers = self.training_subscribers.get(experiment_id, set())
+        logger.info(f"[WS_MANAGER] 发送训练更新: experiment_id={experiment_id}, subscribers={subscribers}, message_type={message.get('type')}")
         if experiment_id in self.training_subscribers:
             await self.broadcast_to_subscribers(
                 message,
                 self.training_subscribers[experiment_id]
             )
+            logger.info(f"[WS_MANAGER] 已发送给 {len(self.training_subscribers[experiment_id])} 个订阅者")
+        else:
+            logger.warning(f"[WS_MANAGER] experiment_id={experiment_id} 没有订阅者，跳过广播")
 
     def get_connection_count(self) -> int:
         """获取当前活跃连接数"""

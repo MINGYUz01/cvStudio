@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
   Play,
   Pause,
@@ -385,11 +385,11 @@ const TrainingMonitor: React.FC = () => {
       setExperiments(converted);
     } catch (err) {
       console.error('获取训练任务失败:', err);
-      showNotification('获取训练任务失败', 'error');
+      // showNotification('获取训练任务失败', 'error'); // 注释掉避免轮询时重复通知
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, []); // 空依赖，只在组件挂载时创建
 
   const fetchDatasets = useCallback(async () => {
     try {
@@ -511,65 +511,98 @@ const TrainingMonitor: React.FC = () => {
   const selectedExp = experiments.find(e => e.id === selectedExpId);
   const isExpRunning = selectedExp?.status === 'running' || selectedExp?.status === 'paused';
 
-  // WebSocket连接：只对正在运行的实验建立连接
-  const shouldConnectWS = view === 'detail' && selectedExpId !== null && isExpRunning;
-  const { connected, disconnect } = useTrainingLogsWS(
-    shouldConnectWS ? `training_${selectedExpId}` : '',
-    {
-      onLog: (data: LogEntry) => {
-        // 接收实时日志
-        setRealTimeLogs(prev => {
-          const newLogs = [...prev, data];
-          // 只保留最新100条日志
-          return newLogs.slice(-100);
-        });
+  // WebSocket回调函数（使用useCallback避免频繁重建连接）
+  const handleWsLog = useCallback((data: LogEntry) => {
+    // 接收实时日志
+    setRealTimeLogs(prev => {
+      const newLogs = [...prev, data];
+      // 只保留最新100条日志
+      return newLogs.slice(-100);
+    });
 
-        // 同时添加到dummyLogs以在模态框中显示
-        const logMessage = `[${data.level}] ${data.message}`;
-        setDummyLogs(prev => [...prev.slice(-100), logMessage]);
-      },
-      onMetrics: (data: MetricsEntry) => {
-        // 接收实时指标
-        setRealTimeMetrics(prev => {
-          const newMetrics = [...prev, data];
-          // 只保留最新100条指标
-          return newMetrics.slice(-100);
-        });
+    // 同时添加到dummyLogs以在模态框中显示
+    const logMessage = `[${data.level}] ${data.message}`;
+    setDummyLogs(prev => [...prev.slice(-100), logMessage]);
+  }, []);
 
-        // 更新实验列表中的对应实验状态
-        setExperiments(prev => prev.map(exp => {
-          if (exp.id === selectedExpId) {
-            // 更新准确率等显示数据
-            return {
-              ...exp,
-              accuracy: data.val_acc ? `${(data.val_acc * 100).toFixed(1)}%` : exp.accuracy,
-              currentEpoch: data.epoch || exp.currentEpoch
-            };
-          }
-          return exp;
-        }));
-      },
-      onStatusChange: (data) => {
-        // 接收状态变化
-        setExperiments(prev => prev.map(exp => {
-          if (exp.id === selectedExpId) {
-            return {
-              ...exp,
-              status: data.status as ExpStatus
-            };
-          }
-          return exp;
-        }));
+  const handleWsMetrics = useCallback((data: MetricsEntry) => {
+    // 调试日志
+    console.log('📊 [WS] 收到指标数据:', data);
 
-        showNotification(`训练状态已更新: ${data.status}`, 'info');
+    // 接收实时指标 - 追加模式，避免重复
+    setRealTimeMetrics(prev => {
+      // 检查是否已存在相同epoch的数据，避免重复添加
+      const existingIndex = prev.findIndex(m => m.epoch === data.epoch);
+      if (existingIndex !== -1) {
+        console.log(`📊 [WS] Epoch ${data.epoch} 已存在，更新数据`);
+        const updated = [...prev];
+        updated[existingIndex] = data;
+        return updated;
       }
-    }
-  );
+
+      const newMetrics = [...prev, data];
+      console.log(`📈 [WS] 当前指标数量: ${newMetrics.length}`);
+      return newMetrics.slice(-100);
+    });
+
+    // 更新实验列表中的对应实验状态
+    setExperiments(prev => prev.map(exp => {
+      if (exp.id === selectedExpId) {
+        return {
+          ...exp,
+          accuracy: data.val_acc ? `${(data.val_acc * 100).toFixed(1)}%` : exp.accuracy,
+          currentEpoch: data.epoch || exp.currentEpoch
+        };
+      }
+      return exp;
+    }));
+  }, [selectedExpId]);
+
+  const handleWsStatusChange = useCallback((data: StatusChange) => {
+    // 接收状态变化
+    setExperiments(prev => prev.map(exp => {
+      if (exp.id === selectedExpId) {
+        return {
+          ...exp,
+          status: data.status as ExpStatus
+        };
+      }
+      return exp;
+    }));
+
+    showNotification(`训练状态已更新: ${data.status}`, 'info');
+  }, [selectedExpId]);
+
+  // WebSocket连接：只对正在运行的实验建立连接
+  // 注意：后端experiment_id格式为 exp_{training_run_id}
+  const shouldConnectWS = view === 'detail' && selectedExpId !== null && isExpRunning;
+  const wsUrl = shouldConnectWS ? `exp_${selectedExpId}` : '';
+
+  // 使用useMemo稳定options对象，避免频繁重建WebSocket连接
+  const wsOptions = useMemo(() => ({
+    onLog: handleWsLog,
+    onMetrics: handleWsMetrics,
+    onStatusChange: handleWsStatusChange,
+  }), [handleWsLog, handleWsMetrics, handleWsStatusChange]);
+
+  const { connected, disconnect } = useTrainingLogsWS(wsUrl, wsOptions);
 
   // 更新WebSocket连接状态
   useEffect(() => {
     setWsConnected(connected);
   }, [connected]);
+
+  // 调试日志（移到connected定义之后）
+  useEffect(() => {
+    console.log('🔌 WebSocket状态:', {
+      view,
+      selectedExpId,
+      isExpRunning,
+      shouldConnectWS,
+      wsUrl,
+      connected
+    });
+  }, [view, selectedExpId, isExpRunning, shouldConnectWS, wsUrl, connected]);
 
   // 切换视图或实验时清空实时数据
   useEffect(() => {
@@ -578,6 +611,84 @@ const TrainingMonitor: React.FC = () => {
       setRealTimeMetrics([]);
     }
   }, [view, selectedExpId]);
+
+  // 定期刷新实验列表（只在列表视图且存在运行中的实验时轮询）
+  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    // 清理之前的轮询
+    if (pollingRef.current) {
+      clearInterval(pollingRef.current);
+      pollingRef.current = null;
+    }
+
+    // 只在列表视图轮询，详情视图使用WebSocket
+    if (view !== 'list') {
+      return;
+    }
+
+    // 定义轮询函数
+    const pollAndUpdate = async () => {
+      try {
+        const data = await trainingService.getTrainingRuns({ limit: 50 });
+
+        // 转换为前端Experiment格式
+        const converted: Experiment[] = data.map((item: TrainingRun) => ({
+          id: item.id,
+          name: item.name,
+          description: item.description,
+          task: (item.hyperparams?.task_type || 'classification') as TaskType,
+          modelId: item.model_id,
+          datasetId: item.dataset_id,
+          status: item.status as ExpStatus,
+          progress: item.progress,
+          currentEpoch: item.current_epoch,
+          totalEpochs: item.total_epochs,
+          bestMetric: item.best_metric,
+          duration: '0s',
+          accuracy: item.best_metric ? `${(item.best_metric * 100).toFixed(1)}%` : '0.00%',
+          startedAt: item.start_time ? new Date(item.start_time).toLocaleString() : new Date(item.created_at).toLocaleString(),
+          config: item.hyperparams,
+          device: item.device,
+          startTime: item.start_time,
+          endTime: item.end_time,
+        }));
+        setExperiments(converted);
+
+        // 检查是否还有运行中的实验
+        const hasRunning = converted.some(e =>
+          e.status === 'running' || e.status === 'queued' || e.status === 'paused'
+        );
+
+        // 如果没有运行中的实验，停止轮询
+        if (!hasRunning && pollingRef.current) {
+          clearInterval(pollingRef.current);
+          pollingRef.current = null;
+        }
+      } catch (err) {
+        console.error('后台刷新失败:', err);
+      }
+    };
+
+    // 首次检查是否需要轮询
+    const hasRunningExperiments = experiments.some(e =>
+      e.status === 'running' || e.status === 'queued' || e.status === 'paused'
+    );
+
+    if (!hasRunningExperiments) {
+      return; // 没有运行中的实验，不需要轮询
+    }
+
+    // 启动定时器（不立即执行，避免与fetchExperiments重复）
+    pollingRef.current = setInterval(pollAndUpdate, 5000);
+
+    return () => {
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current);
+        pollingRef.current = null;
+      }
+    };
+  }, [view, experiments]); // 依赖view和experiments状态
 
   // 创建训练任务
   const handleStartTraining = async () => {
@@ -1212,6 +1323,85 @@ const TrainingMonitor: React.FC = () => {
     </div>
   );
 
+  // 加载历史指标数据（当进入详情页面时总是加载）
+  // 同时定期刷新以获取训练过程中的新指标
+  const metricsRefreshRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    const loadHistoricalMetrics = async () => {
+      if (view !== 'detail' || !selectedExpId) {
+        return;
+      }
+
+      // 从后端加载历史指标（包括训练正在进行时的数据）
+      try {
+        const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1';
+        const token = localStorage.getItem('access_token');
+        const response = await fetch(`${baseUrl}/training/${selectedExpId}/metrics?limit=100`, {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          }
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          if (data.metrics && data.metrics.length > 0) {
+            // 转换为前端格式
+            const metrics: MetricsEntry[] = data.metrics.map((m: any) => ({
+              epoch: m.epoch,
+              timestamp: m.timestamp,
+              train_loss: m.train_loss,
+              train_acc: m.train_acc,
+              val_loss: m.val_loss,
+              val_acc: m.val_acc
+            }));
+
+            // 合并数据：保留已通过WebSocket接收的数据，补充新的
+            setRealTimeMetrics(prev => {
+              const existingEpochs = new Set(prev.map(m => m.epoch));
+              const newMetrics = metrics.filter(m => !existingEpochs.has(m.epoch));
+              const merged = [...prev, ...newMetrics];
+              merged.sort((a, b) => (a.epoch || 0) - (b.epoch || 0));
+              return merged.slice(-100);
+            });
+            console.log(`📊 加载了 ${metrics.length} 条历史指标数据`);
+          } else {
+            console.log('📊 历史指标为空，等待WebSocket数据...');
+          }
+        }
+      } catch (err) {
+        console.error('加载历史指标失败:', err);
+      }
+    };
+
+    // 清理之前的定时器
+    if (metricsRefreshRef.current) {
+      clearInterval(metricsRefreshRef.current);
+      metricsRefreshRef.current = null;
+    }
+
+    // 立即加载一次
+    loadHistoricalMetrics();
+
+    // 检查是否需要定期刷新（只对运行中的任务）
+    const exp = experiments.find(e => e.id === selectedExpId);
+    const shouldRefresh = exp && (exp.status === 'running' || exp.status === 'queued' || exp.status === 'paused');
+
+    if (shouldRefresh) {
+      // 每5秒刷新一次指标
+      metricsRefreshRef.current = setInterval(loadHistoricalMetrics, 5000);
+      console.log('📊 启动指标定期刷新（5秒间隔）');
+    }
+
+    return () => {
+      if (metricsRefreshRef.current) {
+        clearInterval(metricsRefreshRef.current);
+        metricsRefreshRef.current = null;
+      }
+    };
+  }, [view, selectedExpId, experiments]);
+
   // --- View 3: Experiment Detail / Monitor ---
   const renderDetail = () => {
     const exp = experiments.find(e => e.id === selectedExpId);
@@ -1226,20 +1416,14 @@ const TrainingMonitor: React.FC = () => {
     const isRunning = exp.status === 'running';
     const isCompleted = exp.status === 'completed';
 
-    // 构建图表数据 - 使用realTimeMetrics或模拟数据
-    const chartData = realTimeMetrics.length > 0
-      ? realTimeMetrics.map(m => ({
-          epoch: m.epoch || 0,
-          trainLoss: m.train_loss ?? 0,
-          valLoss: m.val_loss ?? 0,
-          metric: m.val_acc ?? m.train_acc ?? 0
-        }))
-      : (exp.currentEpoch > 0 ? Array.from({ length: exp.currentEpoch }, (_, i) => ({
-          epoch: i + 1,
-          trainLoss: Math.max(0.1, 2.5 * Math.exp(-i * 0.05) + Math.random() * 0.3),
-          valLoss: Math.max(0.15, 2.8 * Math.exp(-i * 0.045) + Math.random() * 0.4),
-          metric: Math.min(0.95, 0.3 + i * 0.012 + Math.random() * 0.05)
-        })) : []);
+    // 构建图表数据 - 只使用realTimeMetrics（WebSocket接收的实时数据）
+    // 不再使用随机模拟数据，避免训练完成后曲线变化
+    const chartData = realTimeMetrics.map(m => ({
+      epoch: m.epoch || 0,
+      trainLoss: m.train_loss ?? 0,
+      valLoss: m.val_loss ?? 0,
+      metric: m.val_acc ?? m.train_acc ?? 0
+    }));
 
     return (
         <div className="h-full flex flex-col p-6 space-y-6 overflow-y-auto">
