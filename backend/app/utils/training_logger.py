@@ -433,7 +433,8 @@ class TrainingLogger:
     async def broadcast_status(
         self,
         experiment_id: str,
-        manager
+        manager,
+        best_metric: float = None
     ):
         """
         通过WebSocket广播状态变化
@@ -441,6 +442,7 @@ class TrainingLogger:
         Args:
             experiment_id: 实验/训练任务ID
             manager: WebSocket连接管理器
+            best_metric: 最佳指标（可选，如果提供则包含在广播消息中）
         """
         # 尝试从Redis获取会话信息
         redis = self.redis_client
@@ -468,6 +470,9 @@ class TrainingLogger:
                     total_epochs = session.get("total_epochs", 0)
                     started_at = session.get("started_at")
                     ended_at = session.get("ended_at")
+                    # 如果会话中有best_metric且没有传入best_metric参数，使用会话中的值
+                    if best_metric is None and "best_metric" in session:
+                        best_metric = session.get("best_metric")
             except Exception as e:
                 logger.error(f"从Redis获取状态信息失败: {e}")
 
@@ -478,19 +483,29 @@ class TrainingLogger:
             total_epochs = session.get("total_epochs", 0)
             started_at = session.get("started_at")
             ended_at = session.get("ended_at")
+            # 如果内存中有best_metric且没有传入best_metric参数，使用内存中的值
+            if best_metric is None and "best_metric" in session:
+                best_metric = session.get("best_metric")
+
+        # 构建消息数据
+        message_data = {
+            "status": status,
+            "current_epoch": current_epoch,
+            "total_epochs": total_epochs,
+            "started_at": started_at,
+            "ended_at": ended_at,
+            "message": f"训练状态已更新为: {status}"
+        }
+
+        # 如果有best_metric，添加到消息中
+        if best_metric is not None:
+            message_data["best_metric"] = best_metric
 
         await manager.send_training_update(experiment_id, {
             "type": "status_change",
-            "data": {
-                "status": status,
-                "current_epoch": current_epoch,
-                "total_epochs": total_epochs,
-                "started_at": started_at,
-                "ended_at": ended_at,
-                "message": f"训练状态已更新为: {status}"
-            }
+            "data": message_data
         })
-        logger.info(f"[WS_BROADCAST] 广播状态变化: experiment_id={experiment_id}, status={status}")
+        logger.info(f"[WS_BROADCAST] 广播状态变化: experiment_id={experiment_id}, status={status}, best_metric={best_metric}")
 
 
 # 全局训练日志收集器实例

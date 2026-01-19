@@ -232,3 +232,5 @@ export default {
   getPresetModel,
   createFromPreset
 };
+
+export type { PresetModel, PresetModelDetail };

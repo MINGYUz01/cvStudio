@@ -408,7 +408,7 @@ class Trainer:
                 asyncio.set_event_loop(loop)
 
             loop.run_until_complete(
-                training_logger.broadcast_status(self.experiment_id, manager)
+                training_logger.broadcast_status(self.experiment_id, manager, best_metric=self.best_metric)
             )
 
             # 添加完成日志
@@ -705,7 +705,7 @@ class Trainer:
                 asyncio.set_event_loop(loop)
 
             loop.run_until_complete(
-                training_logger.broadcast_status(self.experiment_id, manager)
+                training_logger.broadcast_status(self.experiment_id, manager, best_metric=self.best_metric)
             )
 
             # 等待恢复信号
@@ -730,7 +730,7 @@ class Trainer:
                 asyncio.set_event_loop(loop)
 
             loop.run_until_complete(
-                training_logger.broadcast_status(self.experiment_id, manager)
+                training_logger.broadcast_status(self.experiment_id, manager, best_metric=self.best_metric)
             )
 
             return True
@@ -773,7 +773,7 @@ class Trainer:
             asyncio.set_event_loop(loop)
 
         loop.run_until_complete(
-            training_logger.broadcast_status(self.experiment_id, manager)
+            training_logger.broadcast_status(self.experiment_id, manager, best_metric=self.best_metric)
         )
 
     def pause(self):

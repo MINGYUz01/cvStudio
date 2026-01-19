@@ -68,6 +68,7 @@ export interface MetricsEntry {
   train_acc?: number;
   val_loss?: number;
   val_acc?: number;
+  best_metric?: number;  // 添加最佳指标字段
   [key: string]: any;
 }
 
@@ -76,6 +77,7 @@ export interface StatusChange {
   status: string;
   current_epoch: number;
   total_epochs: number;
+  best_metric?: number;  // 添加最佳指标字段
   started_at?: string;
   ended_at?: string;
   message: string;
@@ -316,7 +318,7 @@ export const useWebSocket = (
  */
 export const useSystemStatsWS = (options?: UseWebSocketOptions) => {
   // 使用useRef保持client_id稳定，避免频繁重连
-  const clientIdRef = useRef<string>();
+  const clientIdRef = useRef<string | undefined>(undefined);
   if (!clientIdRef.current) {
     clientIdRef.current = `sys_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
   }
@@ -336,7 +338,7 @@ export const useTrainingLogsWS = (
   options: UseWebSocketOptions = {}
 ) => {
   // 使用useRef保持client_id稳定，避免频繁重连
-  const clientIdRef = useRef<string>();
+  const clientIdRef = useRef<string | undefined>(undefined);
   if (!clientIdRef.current) {
     clientIdRef.current = `train_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
   }

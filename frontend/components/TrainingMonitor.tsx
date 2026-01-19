@@ -47,7 +47,7 @@ import {
   AreaChart,
   Area
 } from 'recharts';
-import { useTrainingLogsWS, LogEntry, MetricsEntry } from '../hooks/useWebSocket';
+import { useTrainingLogsWS, LogEntry, MetricsEntry, StatusChange } from '../hooks/useWebSocket';
 import {
   trainingService,
   TrainingRun,
@@ -56,9 +56,10 @@ import {
   LogEntry as TrainingLogEntry
 } from '../src/services/training';
 import { datasetService, Dataset } from '../src/services/datasets';
-import { getAugmentationStrategies, AugmentationStrategy } from '../src/services/augmentation';
+import { getAugmentationStrategies } from '../src/services/augmentation';
 import { weightService, WeightLibraryItem } from '../src/services/weights';
-import { getPresetModels, PresetModel } from '../src/services/models';
+import { getPresetModels, type PresetModel } from '../src/services/models';
+import { AugmentationStrategy } from '../types';
 
 // --- Types ---
 
@@ -365,10 +366,22 @@ const TrainingMonitor: React.FC = () => {
       // 转换为前端Experiment格式
       const converted: Experiment[] = data.map((item: TrainingRun) => {
         // 计算显示的当前 epoch
-        // - 如果未开始训练（queued/pending），显示 0
-        // - 否则显示 current_epoch + 1（1-based）
-        const hasStarted = ['running', 'paused', 'completed', 'failed', 'stopped'].includes(item.status);
-        const displayEpoch = hasStarted ? item.current_epoch + 1 : 0;
+        // 与 progress 的计算方式保持一致：progress = (current_epoch + 1) / total_epochs * 100
+        // 所以显示的 epoch 也应该是 current_epoch + 1（训练中）或 total_epochs（已完成）
+        let displayEpoch: number;
+        if (item.status === 'running') {
+          // 训练中：显示"正在训练的epoch"（current_epoch + 1）
+          displayEpoch = Math.min(item.current_epoch + 1, item.total_epochs);
+        } else if (item.status === 'completed') {
+          // 已完成：显示总epoch数
+          displayEpoch = item.total_epochs;
+        } else if (['queued', 'pending'].includes(item.status)) {
+          // 未开始：显示0
+          displayEpoch = 0;
+        } else {
+          // 其他状态（paused, failed, stopped）：显示已完成的epoch数
+          displayEpoch = item.current_epoch;
+        }
 
         return {
           id: item.id,
@@ -558,19 +571,32 @@ const TrainingMonitor: React.FC = () => {
     // 注意：progress, status 等字段通过定期刷新获取，这里只更新 metrics 相关的字段
     setExperiments(prev => prev.map(exp => {
       if (exp.id === selectedExpId) {
-        // 只有当 progress > 0 时才使用 WebSocket 的 epoch 更新 currentEpoch
-        // 这样可以避免在训练刚开始但 progress 还是 0 时显示 1/10
-        const shouldUpdateEpoch = exp.progress > 0 && (data.epoch ?? -1) >= 0;
+        // 后端的 epoch 表示"刚刚完成的epoch数"（0-based）
+        // 为了与 progress 显示保持一致（progress = (epoch + 1) / total * 100），
+        // 前端显示时使用 epoch + 1，表示"正在训练的epoch"
+        const shouldUpdateEpoch = (data.epoch ?? -1) >= 0;
+
+        // 检查 best_metric 字段（后端已发送）
+        const hasBestMetric = data.best_metric !== undefined && data.best_metric !== null;
+        if (hasBestMetric) {
+          console.log(`📊 [WS] 更新 bestMetric: ${data.best_metric}, epoch: ${data.epoch}`);
+        } else {
+          console.log(`📊 [WS] best_metric 未定义，data=`, data);
+        }
 
         return {
           ...exp,
-          // best_metric 在 WebSocket 消息中，则更新最佳准确率
-          accuracy: (data as any).best_metric !== undefined
-            ? `${(((data as any).best_metric as number) * 100).toFixed(1)}%`
+          // best_metric 在 WebSocket 消息中，则更新最佳准确率和bestMetric
+          accuracy: hasBestMetric
+            ? `${(data.best_metric * 100).toFixed(1)}%`
             : exp.accuracy,
+          bestMetric: hasBestMetric
+            ? data.best_metric
+            : exp.bestMetric,
           // currentAccuracy 表示当前准确率（实时变化）
           currentAccuracy: data.val_acc ? `${(data.val_acc * 100).toFixed(1)}%` : undefined,
-          currentEpoch: shouldUpdateEpoch ? (data.epoch + 1) : exp.currentEpoch
+          // currentEpoch 使用 epoch + 1，与 progress 计算方式保持一致
+          currentEpoch: shouldUpdateEpoch ? Math.min(data.epoch + 1, exp.totalEpochs) : exp.currentEpoch
         };
       }
       return exp;
@@ -579,12 +605,28 @@ const TrainingMonitor: React.FC = () => {
 
   const handleWsStatusChange = useCallback((data: StatusChange) => {
     // 接收状态变化
+    console.log('🔄 [WS] 状态变化:', data);
     setExperiments(prev => prev.map(exp => {
       if (exp.id === selectedExpId) {
-        return {
+        const updated = {
           ...exp,
           status: data.status as ExpStatus
         };
+
+        // 当训练完成时，确保 currentEpoch 显示为 total_epochs
+        if (data.status === 'completed') {
+          updated.currentEpoch = exp.totalEpochs;
+          console.log(`🔄 [WS] 训练完成，设置 currentEpoch = ${exp.totalEpochs}`);
+        }
+
+        // 如果 status_change 消息中包含 best_metric，也更新它
+        if (data.best_metric !== undefined && data.best_metric !== null) {
+          updated.bestMetric = data.best_metric;
+          updated.accuracy = `${(data.best_metric * 100).toFixed(1)}%`;
+          console.log(`🔄 [WS] 更新 bestMetric: ${data.best_metric}`);
+        }
+
+        return updated;
       }
       return exp;
     }));
@@ -653,9 +695,17 @@ const TrainingMonitor: React.FC = () => {
 
         // 转换为前端Experiment格式
         const converted: Experiment[] = data.map((item: TrainingRun) => {
-          // 计算显示的当前 epoch
-          const hasStarted = ['running', 'paused', 'completed', 'failed', 'stopped'].includes(item.status);
-          const displayEpoch = hasStarted ? item.current_epoch + 1 : 0;
+          // 计算显示的当前 epoch（与fetchExperiments保持一致）
+          let displayEpoch: number;
+          if (item.status === 'running') {
+            displayEpoch = Math.min(item.current_epoch + 1, item.total_epochs);
+          } else if (item.status === 'completed') {
+            displayEpoch = item.total_epochs;
+          } else if (['queued', 'pending'].includes(item.status)) {
+            displayEpoch = 0;
+          } else {
+            displayEpoch = item.current_epoch;
+          }
 
           return {
             id: item.id,
@@ -1374,9 +1424,17 @@ const TrainingMonitor: React.FC = () => {
           setExperiments(prev => {
             const updated = prev.map(exp => {
               if (exp.id === selectedExpId) {
-                // 计算显示的当前 epoch
-                const hasStarted = ['running', 'paused', 'completed', 'failed', 'stopped'].includes(data.status);
-                const displayEpoch = hasStarted ? data.current_epoch + 1 : 0;
+                // 计算显示的当前 epoch（与fetchExperiments保持一致）
+                let displayEpoch: number;
+                if (data.status === 'running') {
+                  displayEpoch = Math.min(data.current_epoch + 1, data.total_epochs);
+                } else if (data.status === 'completed') {
+                  displayEpoch = data.total_epochs;
+                } else if (['queued', 'pending'].includes(data.status)) {
+                  displayEpoch = 0;
+                } else {
+                  displayEpoch = data.current_epoch;
+                }
 
                 return {
                   ...exp,
@@ -1549,10 +1607,10 @@ const TrainingMonitor: React.FC = () => {
     const isCompleted = exp.status === 'completed';
 
     // 构建图表数据 - 只使用realTimeMetrics（WebSocket接收的实时数据）
-    // 不再使用随机模拟数据，避免训练完成后曲线变化
-    // 注意：realTimeMetrics 中的 epoch 是 0-based（来自后端），需要转换为 1-based 显示
+    // 注意：realTimeMetrics 中的 epoch 是 0-based，表示"刚刚完成的epoch数"
+    // 为了与 progress 显示保持一致，图表中显示 epoch + 1
     const chartData = realTimeMetrics.map(m => ({
-      epoch: (m.epoch ?? 0) + 1,  // 后端 0-based 转换为前端 1-based
+      epoch: (m.epoch ?? 0) + 1,  // 转换为1-based显示
       trainLoss: m.train_loss ?? 0,
       valLoss: m.val_loss ?? 0,
       metric: m.val_acc ?? m.train_acc ?? 0
