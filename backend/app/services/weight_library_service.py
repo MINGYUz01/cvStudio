@@ -746,6 +746,48 @@ class WeightLibraryService:
             self.logger.error(f"获取可用于训练的权重失败: {e}")
             return []
 
+    def get_weight_tree_by_architecture(
+        self,
+        db: Session,
+        architecture_id: Optional[int] = None,
+        task_type: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        获取按架构筛选的权重树形结构
+
+        Args:
+            db: 数据库会话
+            architecture_id: 模型架构ID筛选
+            task_type: 任务类型筛选
+
+        Returns:
+            权重树列表（每个根节点包含其所有子节点）
+        """
+        try:
+            # 获取根节点
+            query = db.query(WeightLibrary).filter(
+                WeightLibrary.is_root == True
+            )
+
+            if architecture_id:
+                query = query.filter(WeightLibrary.architecture_id == architecture_id)
+
+            if task_type:
+                query = query.filter(WeightLibrary.task_type == task_type)
+
+            roots = query.order_by(WeightLibrary.created_at.desc()).all()
+
+            trees = []
+            for root in roots:
+                trees.append(self._build_subtree(db, root))
+
+            self.logger.debug(f"获取按架构筛选的权重树: {len(trees)} 个根节点")
+            return trees
+
+        except Exception as e:
+            self.logger.error(f"获取按架构筛选的权重树失败: {e}")
+            return []
+
     def get_weight_training_config(
         self,
         db: Session,

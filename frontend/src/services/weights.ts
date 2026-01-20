@@ -321,6 +321,19 @@ class WeightService {
     if (taskType) params.task_type = taskType;
     return await apiClient.get<WeightForTrainingOption[]>('/weights/for-training', params);
   }
+
+  /**
+   * 获取按架构筛选的权重树（用于预训练权重选择）
+   */
+  async getWeightTreeByArchitecture(
+    architectureId?: number,
+    taskType?: TaskType
+  ): Promise<WeightTreeItem[]> {
+    const params: any = {};
+    if (architectureId) params.architecture_id = architectureId;
+    if (taskType) params.task_type = taskType;
+    return await apiClient.get<WeightTreeItem[]>('/weights/tree-by-architecture', params);
+  }
 }
 
 export const weightService = new WeightService();

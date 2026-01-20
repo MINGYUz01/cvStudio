@@ -615,35 +615,89 @@ class TrainingService:
             if task_type not in ["classification", "detection"]:
                 task_type = "classification"
 
-            # 获取checkpoint列表 - 使用实验目录中的checkpoint
-            checkpoint_dir = training_run.experiment_dir or f"data/checkpoints/exp_{training_run_id}"
-            checkpoint_manager = CheckpointManager(checkpoint_dir)
+            # 获取checkpoint目录 - 支持多个可能的路径
+            experiment_dir_rel = training_run.experiment_dir or f"data/experiments/exp_{training_run_id}"
+            experiment_dir = Path(experiment_dir_rel)
+
+            # 如果相对路径不存在，尝试从backend目录查找
+            if not experiment_dir.exists():
+                backend_exp_dir = Path("backend/data/experiments") / f"exp_{training_run_id}"
+                if backend_exp_dir.exists():
+                    experiment_dir = backend_exp_dir
+
+            checkpoints_dir = experiment_dir / "checkpoints"
+
+            self.logger.info(f"查找checkpoint，实验目录: {experiment_dir}, checkpoint目录: {checkpoints_dir}")
 
             # 先尝试从数据库获取checkpoint记录
+            checkpoint_manager = CheckpointManager(str(experiment_dir))
             checkpoints = checkpoint_manager.list_checkpoints(training_run_id, db)
 
             # 如果数据库中没有记录，尝试从文件系统读取
             if not checkpoints:
                 import torch
-                checkpoint_files = list(Path(checkpoint_dir).glob("checkpoint_*.pt"))
+                self.logger.info(f"数据库中没有checkpoint记录，尝试从文件系统读取")
+
+                # 收集所有可能的checkpoint文件
+                checkpoint_files = []
+
+                # 1. 检查checkpoints子目录
+                if checkpoints_dir.exists():
+                    checkpoint_files.extend(checkpoints_dir.glob("*.pt"))
+                    self.logger.info(f"从checkpoints子目录找到: {len(checkpoint_files)} 个文件")
+
+                # 2. 检查实验根目录（兼容旧格式）
+                checkpoint_files.extend(experiment_dir.glob("checkpoint*.pt"))
+                checkpoint_files.extend(experiment_dir.glob("epoch*.pt"))
+                checkpoint_files.extend(experiment_dir.glob("best_model.pt"))
+
+                self.logger.info(f"总共找到 {len(checkpoint_files)} 个checkpoint文件")
+
                 if checkpoint_files:
                     checkpoints = []
                     for cf in sorted(checkpoint_files):
                         try:
                             ckpt = torch.load(cf, map_location='cpu')
+                            # 判断是否为best模型
+                            is_best = False
+                            if "best_model.pt" in str(cf):
+                                is_best = True
+                            elif ckpt.get("is_best"):
+                                is_best = ckpt.get("is_best")
+
+                            # 获取epoch信息
+                            epoch = ckpt.get("epoch", 0)
+
+                            # 尝试从文件名解析epoch
+                            if "epoch_" in cf.name:
+                                try:
+                                    epoch = int(cf.name.split("epoch_")[1].split(".pt")[0])
+                                except:
+                                    pass
+                            elif "checkpoint_epoch_" in cf.name:
+                                try:
+                                    epoch = int(cf.name.split("checkpoint_epoch_")[1].split(".pt")[0])
+                                except:
+                                    pass
+
+                            # 获取指标值
+                            metrics = ckpt.get("metrics", {})
+                            metric_value = metrics.get("val_acc", metrics.get("val_accuracy", 0))
+
                             checkpoints.append({
-                                "epoch": ckpt.get("epoch", 0),
+                                "epoch": epoch,
                                 "path": str(cf),
-                                "metric_value": ckpt.get("metrics", {}).get("val_acc", 0),
-                                "metrics": ckpt.get("metrics", {}),
-                                "is_best": ckpt.get("is_best", False),
+                                "metric_value": metric_value,
+                                "metrics": metrics,
+                                "is_best": is_best,
                                 "file_size": cf.stat().st_size
                             })
+                            self.logger.info(f"找到checkpoint: {cf.name}, epoch={epoch}, is_best={is_best}, metric={metric_value:.4f}")
                         except Exception as e:
                             self.logger.warning(f"无法加载checkpoint文件 {cf}: {e}")
 
             if not checkpoints:
-                raise ValueError(f"未找到任何checkpoint (run_id: {training_run_id}, 目录: {checkpoint_dir})")
+                raise ValueError(f"未找到任何checkpoint (run_id: {training_run_id}, 目录: {experiment_dir})")
 
             # 获取best checkpoint
             best_cp = None
@@ -680,7 +734,34 @@ class TrainingService:
             if isinstance(input_size, int):
                 input_size = [input_size, input_size]
 
-            # 1. 保存best模型作为v1.0
+            # 检查是否使用了预训练权重
+            pretrained_weight_id = training_run.pretrained_weight_id
+            parent_weight_id = None
+            base_version = "1.0"
+
+            if pretrained_weight_id:
+                # 获取预训练权重信息
+                from app.models.weight_library import WeightLibrary as WeightModel
+                pretrained = db.query(WeightModel).filter(WeightModel.id == pretrained_weight_id).first()
+                if pretrained:
+                    parent_weight_id = pretrained_weight_id
+                    # 如果父权重是训练得到的，它应该已经是根节点
+                    # 版本号在父权重版本基础上递增
+                    try:
+                        parent_version_parts = pretrained.version.split(".")
+                        if len(parent_version_parts) >= 2:
+                            major = int(parent_version_parts[0])
+                            minor = int(parent_version_parts[1])
+                            # 新的best版本作为父版本的下一个小版本
+                            base_version = f"{major}.{minor + 1}.0"
+                        else:
+                            base_version = "1.0"
+                    except:
+                        base_version = "1.0"
+
+                    self.logger.info(f"使用预训练权重 {pretrained.name} v{pretrained.version}，新版本将作为子节点")
+
+            # 1. 保存best模型
             best_file_path = Path(best_cp["path"])
             if not best_file_path.exists():
                 raise ValueError(f"Best checkpoint文件不存在: {best_cp['path']}")
@@ -701,11 +782,16 @@ class TrainingService:
 
             # 创建权重库记录
             from app.models.weight_library import WeightLibrary
+
+            # 确定best权重是否为根节点
+            best_is_root = parent_weight_id is None
+
             best_weight = WeightLibrary(
                 name=weight_name,
                 description=f"{description} (最佳模型)" if description else f"{weight_name} - 最佳模型",
                 task_type=task_type,
-                version="1.0",
+                version=base_version,
+                parent_version_id=parent_weight_id,  # 关联到预训练权重
                 file_path=str(best_target_path),
                 file_name=best_filename,
                 file_size=best_target_path.stat().st_size,
@@ -714,7 +800,7 @@ class TrainingService:
                 uploaded_by=training_run.created_by,
                 source_type="trained",
                 source_training_id=training_run_id,
-                is_root=True,
+                is_root=best_is_root,
                 architecture_id=training_run.model_id
             )
             db.add(best_weight)
@@ -722,7 +808,7 @@ class TrainingService:
 
             last_weight_record = None
 
-            # 2. 如果需要，保存last模型作为v1.1
+            # 2. 如果需要，保存last模型
             if include_last:
                 # 检查best和last是否是同一个文件
                 if last_cp["path"] == best_cp["path"]:
@@ -735,12 +821,24 @@ class TrainingService:
                     shutil.copy2(last_cp["path"], str(last_target_path))
                     last_filename_for_db = last_filename
 
+                # last版本的版本号
+                try:
+                    base_parts = base_version.split(".")
+                    if len(base_parts) >= 2:
+                        major = int(base_parts[0])
+                        minor = int(base_parts[1])
+                        last_version = f"{major}.{minor + 1}"
+                    else:
+                        last_version = "1.1"
+                except:
+                    last_version = "1.1"
+
                 last_weight_record = WeightLibrary(
                     name=weight_name,
                     description=f"{description} (最后Epoch)" if description else f"{weight_name} - 最后Epoch",
                     task_type=task_type,
-                    version="1.1",
-                    parent_version_id=best_weight.id,  # 关联到best版本
+                    version=last_version,
+                    parent_version_id=best_weight.id,  # last是best的子节点
                     file_path=str(last_target_path),
                     file_name=last_filename_for_db,
                     file_size=last_target_path.stat().st_size,
@@ -749,7 +847,7 @@ class TrainingService:
                     uploaded_by=training_run.created_by,
                     source_type="trained",
                     source_training_id=training_run_id,
-                    is_root=False,
+                    is_root=False,  # last永远不是根节点
                     architecture_id=training_run.model_id
                 )
                 db.add(last_weight_record)

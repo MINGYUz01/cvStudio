@@ -315,6 +315,30 @@ async def get_weights_for_training(
         raise HTTPException(500, f"获取可用于训练的权重失败: {str(e)}")
 
 
+@router.get("/tree-by-architecture", response_model=List[WeightTreeResponse])
+async def get_weight_tree_by_architecture(
+    architecture_id: Optional[int] = Query(None, description="模型架构ID"),
+    task_type: Optional[str] = Query(None, description="任务类型"),
+    db: Session = Depends(get_db)
+):
+    """
+    获取按架构筛选的权重树形结构
+
+    返回指定模型架构和任务类型的权重树（用于预训练权重选择）
+    """
+    try:
+        trees = weight_service.get_weight_tree_by_architecture(
+            db=db,
+            architecture_id=architecture_id,
+            task_type=task_type
+        )
+        return trees
+
+    except Exception as e:
+        logger.error(f"获取按架构筛选的权重树失败: {e}")
+        raise HTTPException(500, f"获取按架构筛选的权重树失败: {str(e)}")
+
+
 @router.get("/by-task/{task_type}", response_model=WeightLibraryList)
 async def list_weights_by_task(
     task_type: str,
