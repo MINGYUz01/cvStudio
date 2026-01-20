@@ -554,50 +554,6 @@ async def control_training_run(
         )
 
 
-@router.get("/{training_id}/metrics", response_model=List[MetricsEntry])
-async def get_training_metrics(
-    training_id: int,
-    limit: int = 100
-):
-    """
-    获取训练指标数据
-
-    Args:
-        training_id: 训练任务ID
-        limit: 限制返回数量
-
-    Returns:
-        指标数据列表
-    """
-    try:
-        metrics = training_service.get_training_metrics(
-            training_run_id=training_id,
-            limit=limit
-        )
-
-        return [
-            MetricsEntry(
-                epoch=m["epoch"],
-                timestamp=m["timestamp"],
-                train_loss=m.get("train_loss"),
-                train_acc=m.get("train_acc"),
-                val_loss=m.get("val_loss"),
-                val_acc=m.get("val_acc"),
-                extra_metrics={k: v for k, v in m.items()
-                              if k not in ["epoch", "timestamp", "train_loss",
-                                         "train_acc", "val_loss", "val_acc"]}
-            )
-            for m in metrics
-        ]
-
-    except Exception as e:
-        logger.error(f"获取训练指标失败: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e)
-        )
-
-
 @router.get("/{training_id}/logs", response_model=List[LogEntry])
 async def get_training_logs(
     training_id: int,

@@ -14,6 +14,7 @@ from app.models.training import TrainingRun
 from app.utils.config_parser import TrainingConfigParser
 from app.utils.checkpoint_manager import CheckpointManager
 from app.utils.training_logger import training_logger, TrainingStatus
+from app.utils.experiment_manager import ExperimentManager
 
 
 def debug_log(msg: str, level: str = "INFO"):
@@ -84,6 +85,20 @@ class TrainingService:
             db.add(training_run)
             db.commit()
             db.refresh(training_run)
+
+            # 创建实验目录
+            experiment_manager = ExperimentManager(training_run.id)
+            experiment_manager.create_experiment_dir()
+            experiment_dir_path = str(experiment_manager.experiment_dir)
+
+            # 更新数据库记录中的实验目录路径
+            training_run.experiment_dir = experiment_dir_path
+            db.commit()
+
+            # 保存训练配置到文件
+            experiment_manager.save_config(config)
+
+            self.logger.info(f"实验目录已创建: {experiment_dir_path}")
 
             # 创建训练日志会话
             experiment_id = f"exp_{training_run.id}"
@@ -225,6 +240,7 @@ class TrainingService:
             ValueError: 当训练任务不存在或操作无效时
         """
         try:
+            from app.database import SessionLocal
             db = SessionLocal()
             try:
                 training_run = db.query(TrainingRun).filter(
@@ -241,48 +257,20 @@ class TrainingService:
                 if action not in valid_actions:
                     raise ValueError(f"无效的操作: {action}")
 
-                # 停止操作：先撤销正在运行的训练任务
-                if action == "stop" and training_run.celery_task_id:
-                    try:
-                        from backend.celery_app import celery_app
-                        celery_app.control.revoke(
-                            training_run.celery_task_id,
-                            terminate=True,
-                            signal='SIGKILL'
-                        )
-                        debug_log(f"已撤销训练任务: {training_run.celery_task_id}", "INFO")
-                    except Exception as e:
-                        debug_log(f"撤销训练任务失败: {e}", "WARNING")
-                        # 继续执行状态更新
-
-                # 提交Celery控制任务
-                from app.tasks.training_tasks import control_training
-
-                task = control_training.delay(experiment_id, action)
-
-                # 更新状态
+                # 先更新 training_logger 状态（让训练循环检测到并停止）
                 if action == "pause":
+                    training_logger.update_status(experiment_id, TrainingStatus.PAUSED)
                     training_run.status = "paused"
-                    training_logger.update_status(
-                        experiment_id,
-                        TrainingStatus.PAUSED
-                    )
                 elif action == "resume":
+                    training_logger.update_status(experiment_id, TrainingStatus.RUNNING)
                     training_run.status = "running"
-                    training_logger.update_status(
-                        experiment_id,
-                        TrainingStatus.RUNNING
-                    )
                 elif action == "stop":
+                    training_logger.update_status(experiment_id, TrainingStatus.STOPPED)
                     training_run.status = "stopped"
                     training_run.end_time = datetime.utcnow()
                     # 计算最终进度
                     if training_run.total_epochs > 0:
                         training_run.progress = (training_run.current_epoch / training_run.total_epochs) * 100
-                    training_logger.update_status(
-                        experiment_id,
-                        TrainingStatus.STOPPED
-                    )
 
                 db.commit()
 
@@ -294,14 +282,28 @@ class TrainingService:
                     "service"
                 )
 
+                # 对于停止操作，尝试撤销 Celery 任务（作为额外的保险）
+                if action == "stop" and training_run.celery_task_id:
+                    try:
+                        from backend.celery_app import celery_app
+                        celery_app.control.revoke(
+                            training_run.celery_task_id,
+                            terminate=True,
+                            signal='SIGKILL'
+                        )
+                        debug_log(f"已撤销训练任务: {training_run.celery_task_id}", "INFO")
+                    except Exception as e:
+                        debug_log(f"撤销训练任务失败: {e}", "WARNING")
+                        # 继续执行，因为训练循环会通过 training_logger 状态检测并停止
+
                 self.logger.info(
-                    f"训练控制: {training_run_id} - {action} (任务: {task.id})"
+                    f"训练控制: {training_run_id} - {action}"
                 )
 
                 return {
                     "success": True,
                     "action": action,
-                    "task_id": task.id,
+                    "task_id": training_run.celery_task_id or "",
                     "experiment_id": experiment_id
                 }
 
@@ -446,7 +448,12 @@ class TrainingService:
             if not training_run:
                 return False
 
-            # 删除checkpoint文件
+            # 删除实验目录（包含所有训练文件）
+            experiment_manager = ExperimentManager(training_run_id)
+            if experiment_manager.delete_experiment_dir():
+                self.logger.info(f"实验目录已删除: {experiment_manager.experiment_dir}")
+
+            # 删除checkpoint文件（旧目录结构，兼容性）
             checkpoint_dir = f"data/checkpoints/exp_{training_run_id}"
             checkpoint_manager = CheckpointManager(checkpoint_dir)
 
@@ -506,6 +513,7 @@ class TrainingService:
                 raise ValueError(f"未找到最佳checkpoint (run_id: {training_run_id})")
 
             # 获取训练任务信息
+            from app.database import SessionLocal
             db = SessionLocal()
             try:
                 training_run = db.query(TrainingRun).filter(

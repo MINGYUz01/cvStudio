@@ -136,10 +136,10 @@ def create_application() -> FastAPI:
         tags=["WebSocket"]
     )
 
-    # 训练日志API
+    # 训练日志API（使用独立前缀避免与 training.router 冲突）
     app.include_router(
         training_logs.router,
-        prefix=f"{settings.API_V1_STR}/training",
+        prefix=f"{settings.API_V1_STR}/logs",
         tags=["训练日志"]
     )
 

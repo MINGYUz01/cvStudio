@@ -367,6 +367,32 @@ class TrainingLogger:
 
         return None
 
+    def get_session(self, experiment_id: str) -> Optional[dict]:
+        """
+        获取训练会话的简化版本（用于状态检查）
+
+        Args:
+            experiment_id: 实验/训练任务ID
+
+        Returns:
+            会话字典或None
+        """
+        # 优先从Redis获取
+        redis = self.redis_client
+        if redis:
+            try:
+                session_data = redis.get(self._get_session_key(experiment_id))
+                if session_data:
+                    return json.loads(session_data)
+            except Exception as e:
+                logger.error(f"从Redis获取会话失败: {e}")
+
+        # 降级到内存
+        if experiment_id in self.training_sessions:
+            return self.training_sessions[experiment_id]
+
+        return None
+
     def delete_session(self, experiment_id: str):
         """
         删除训练会话
