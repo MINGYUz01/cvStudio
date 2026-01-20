@@ -21,6 +21,9 @@ from app.schemas.training import (
     TrainingControlResponse,
     TrainingSaveRequest,
     TrainingSaveResponse,
+    TrainingSaveToWeightsRequest,
+    TrainingSaveToWeightsResponse,
+    WeightLibraryListItem,
     CheckpointInfo,
     MetricsEntry,
     LogEntry,
@@ -663,6 +666,62 @@ async def save_training_to_weights(
             message="最佳模型已保存到权重库",
             path=weights_path
         )
+
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+    except Exception as e:
+        logger.error(f"保存到权重库失败: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+@router.post("/{training_id}/save-to-weights", response_model=TrainingSaveToWeightsResponse)
+async def save_training_to_weights_library(
+    training_id: int,
+    request: TrainingSaveToWeightsRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    保存训练模型到权重库（带版本管理）
+
+    保存best模型和最后一个epoch模型到权重库。
+    best模型作为主版本（1.0），last模型作为子版本（1.1）。
+
+    Args:
+        training_id: 训练任务ID
+        request: 保存请求（包含权重名称、描述等）
+        db: 数据库会话
+
+    Returns:
+        保存结果，包含创建的权重库记录
+    """
+    try:
+        result = training_service.save_to_weights_library(
+            training_run_id=training_id,
+            weight_name=request.name,
+            description=request.description or "",
+            include_last=request.include_last,
+            db=db
+        )
+
+        # 构建响应数据
+        response = TrainingSaveToWeightsResponse(
+            success=True,
+            message="权重已成功保存到权重库"
+        )
+
+        if result.get("best_weight"):
+            response.best_weight = WeightLibraryListItem.model_validate(result["best_weight"])
+
+        if result.get("last_weight"):
+            response.last_weight = WeightLibraryListItem.model_validate(result["last_weight"])
+
+        return response
 
     except ValueError as e:
         raise HTTPException(

@@ -18,7 +18,6 @@ import {
   CheckCircle,
   XCircle,
   AlertOctagon,
-  Terminal,
   MoreHorizontal,
   HelpCircle,
   Sliders,
@@ -201,26 +200,6 @@ const TaskIcon: React.FC<{ task: TaskType }> = ({ task }) => {
     }
 };
 
-const LogModal: React.FC<{ isOpen: boolean; onClose: () => void; logs: string[] }> = ({ isOpen, onClose, logs }) => {
-    if (!isOpen) return null;
-    return (
-        <div className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-            <div className="bg-slate-900 border border-slate-700 rounded-xl w-full max-w-3xl h-[600px] flex flex-col shadow-2xl animate-in fade-in zoom-in duration-200">
-                <div className="flex justify-between items-center p-4 border-b border-slate-700 bg-slate-950/50 rounded-t-xl">
-                    <h3 className="text-white font-bold flex items-center"><Terminal size={18} className="mr-2 text-slate-400"/> 实时训练日志</h3>
-                    <button onClick={onClose} className="text-slate-400 hover:text-white"><X size={20} /></button>
-                </div>
-                <div className="flex-1 overflow-y-auto p-4 font-mono text-xs bg-black text-slate-300 space-y-1">
-                    {logs.map((log, i) => (
-                        <div key={i} className="hover:bg-slate-900/50 px-2 py-0.5 rounded">{log}</div>
-                    ))}
-                    <div className="animate-pulse text-cyan-500">_</div>
-                </div>
-            </div>
-        </div>
-    );
-};
-
 const ConfigPreviewModal: React.FC<{ isOpen: boolean; onClose: () => void; config: any }> = ({ isOpen, onClose, config }) => {
     if (!isOpen) return null;
     return (
@@ -241,6 +220,129 @@ const ConfigPreviewModal: React.FC<{ isOpen: boolean; onClose: () => void; confi
             </div>
         </div>
     );
+};
+
+const SaveToWeightsModal: React.FC<{
+  isOpen: boolean;
+  onClose: () => void;
+  onConfirm: (name: string, description: string, includeLast: boolean) => void;
+  experiment: Experiment | null;
+}> = ({ isOpen, onClose, onConfirm, experiment }) => {
+  const [name, setName] = useState('');
+  const [description, setDescription] = useState('');
+  const [includeLast, setIncludeLast] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
+
+  useEffect(() => {
+    if (isOpen && experiment) {
+      setName(experiment.name);
+      setDescription(`训练完成于 ${experiment.completedAt || experiment.startedAt}`);
+    }
+  }, [isOpen, experiment]);
+
+  const handleSubmit = async () => {
+    if (!name.trim()) return;
+    setIsSaving(true);
+    try {
+      await onConfirm(name.trim(), description.trim(), includeLast);
+      onClose();
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  if (!isOpen) return null;
+  return (
+    <div className="fixed inset-0 z-[150] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+      <div className="bg-slate-900 border border-slate-700 rounded-xl w-full max-w-md shadow-2xl animate-in fade-in zoom-in duration-200">
+        <div className="flex justify-between items-center p-4 border-b border-slate-700 bg-slate-950/50 rounded-t-xl">
+          <h3 className="text-white font-bold flex items-center">
+            <Database size={18} className="mr-2 text-emerald-400"/>
+            保存到权重库
+          </h3>
+          <button onClick={onClose} className="text-slate-400 hover:text-white"><X size={20} /></button>
+        </div>
+
+        <div className="p-4 space-y-4">
+          <div>
+            <label className="block text-slate-400 text-xs uppercase font-medium mb-2">权重名称 *</label>
+            <input
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="输入权重名称"
+              className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-white text-sm focus:outline-none focus:border-cyan-500"
+            />
+          </div>
+
+          <div>
+            <label className="block text-slate-400 text-xs uppercase font-medium mb-2">描述</label>
+            <textarea
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="输入权重描述（可选）"
+              rows={3}
+              className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-white text-sm focus:outline-none focus:border-cyan-500 resize-none"
+            />
+          </div>
+
+          <div>
+            <label className="block text-slate-400 text-xs uppercase font-medium mb-2">任务类型</label>
+            <div className="px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-slate-500 text-sm">
+              {experiment?.task === 'classification' ? '图像分类 (Classification)' : '目标检测 (Detection)'}
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between p-3 bg-slate-950/50 border border-slate-700 rounded-lg">
+            <div>
+              <span className="text-white text-sm font-medium">保存最后Epoch模型</span>
+              <p className="text-slate-500 text-xs mt-1">将最后一个epoch的模型作为v1.1版本保存</p>
+            </div>
+            <label className="relative inline-flex items-center cursor-pointer">
+              <input
+                type="checkbox"
+                checked={includeLast}
+                onChange={(e) => setIncludeLast(e.target.checked)}
+                className="sr-only peer"
+              />
+              <div className="w-11 h-6 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
+            </label>
+          </div>
+
+          <div className="p-3 bg-cyan-950/20 border border-cyan-900/30 rounded-lg">
+            <div className="flex items-start">
+              <HelpCircle size={14} className="text-cyan-400 mt-0.5 mr-2 flex-shrink-0"/>
+              <div className="text-xs text-cyan-300/80">
+                <p className="font-medium mb-1">保存说明：</p>
+                <ul className="space-y-0.5 text-slate-400">
+                  <li>• 最佳模型将作为 v1.0 版本保存</li>
+                  {includeLast && <li>• 最后Epoch模型将作为 v1.1 版本保存</li>}
+                </ul>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="p-4 border-t border-slate-700 flex justify-end gap-3">
+          <button
+            onClick={onClose}
+            disabled={isSaving}
+            className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold rounded transition-colors disabled:opacity-50"
+          >
+            取消
+          </button>
+          <button
+            onClick={handleSubmit}
+            disabled={!name.trim() || isSaving}
+            className="px-4 py-2 bg-emerald-700 hover:bg-emerald-600 text-white text-xs font-bold rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center"
+          >
+            {isSaving ? <RefreshCw size={14} className="mr-2 animate-spin" /> : <HardDrive size={14} className="mr-2" />}
+            {isSaving ? '保存中...' : '确认保存'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 };
 
 const ConfirmModal: React.FC<{ isOpen: boolean; onClose: () => void; onConfirm: () => void; title: string; msg: string; type?: 'danger'|'info' }> = ({ isOpen, onClose, onConfirm, title, msg, type = 'danger' }) => {
@@ -335,7 +437,6 @@ const TrainingMonitor: React.FC = () => {
   const [config, setConfig] = useState<Record<string, any>>({});
 
   // Modals & Action State
-  const [showLogModal, setShowLogModal] = useState(false);
   const [showConfigModal, setShowConfigModal] = useState(false);
   const [deleteModal, setDeleteModal] = useState<{isOpen: boolean, id: number | null, name: string}>({ isOpen: false, id: null, name: '' });
 
@@ -348,7 +449,12 @@ const TrainingMonitor: React.FC = () => {
   // Rename Modal State
   const [renameModal, setRenameModal] = useState<{isOpen: boolean, id: number | null, currentName: string}>({ isOpen: false, id: null, currentName: '' });
 
-  const [dummyLogs, setDummyLogs] = useState<string[]>([]);
+  // Save Weights Modal State
+  const [saveWeightsModal, setSaveWeightsModal] = useState<{
+    isOpen: boolean;
+    exp: Experiment | null;
+  }>({ isOpen: false, exp: null });
+
   const [notification, setNotification] = useState<{msg: string, type: 'error' | 'success' | 'info'} | null>(null);
 
   // WebSocket实时数据状态
@@ -541,10 +647,6 @@ const TrainingMonitor: React.FC = () => {
       // 只保留最新100条日志
       return newLogs.slice(-100);
     });
-
-    // 同时添加到dummyLogs以在模态框中显示
-    const logMessage = `[${data.level}] ${data.message}`;
-    setDummyLogs(prev => [...prev.slice(-100), logMessage]);
   }, []);
 
   const handleWsMetrics = useCallback((data: MetricsEntry) => {
@@ -951,13 +1053,35 @@ const TrainingMonitor: React.FC = () => {
       setRenameModal({ isOpen: false, id: null, currentName: '' });
   }
 
-  // NEW: Handle Save to Registry
+  // Handle Save to Registry - 打开保存权重对话框
   const handleSaveToRegistry = (exp: Experiment) => {
       if (exp.status !== 'completed') {
+          showNotification('只有已完成的训练才能保存到权重库', 'error');
           return;
       }
-      // Simulation: In a real app this would call an API
-      showNotification(`权重文件 ${exp.name}.pt 已保存到权重库`, "success");
+      setSaveWeightsModal({ isOpen: true, exp });
+  };
+
+  // 确认保存权重到权重库
+  const handleConfirmSaveWeights = async (name: string, description: string, includeLast: boolean) => {
+      if (!saveWeightsModal.exp) return;
+
+      try {
+          const result = await trainingService.saveToWeights(saveWeightsModal.exp.id, {
+              name,
+              description,
+              include_last: includeLast
+          });
+
+          if (result.success) {
+              showNotification(`权重已成功保存到权重库`, 'success');
+          } else {
+              showNotification(result.message || '保存失败', 'error');
+          }
+      } catch (error) {
+          console.error('保存权重失败:', error);
+          showNotification('保存权重失败，请稍后重试', 'error');
+      }
   };
 
   // --- Dynamic Field Renderer ---
@@ -1663,12 +1787,6 @@ const TrainingMonitor: React.FC = () => {
                          </div>
                      )}
                      <button
-                        onClick={() => setShowLogModal(true)}
-                        className="flex items-center px-3 py-2 bg-slate-900 hover:bg-slate-800 text-slate-300 text-xs font-bold rounded border border-slate-700 transition-colors"
-                     >
-                        <Terminal size={14} className="mr-2" /> 查看日志
-                     </button>
-                     <button
                         onClick={() => handleSaveToRegistry(exp)}
                         disabled={!isCompleted}
                         title={!isCompleted ? "训练未完成，无法导出" : "将权重保存到权重库"}
@@ -1784,8 +1902,13 @@ const TrainingMonitor: React.FC = () => {
             </div>
 
             {/* Modals */}
-            <LogModal isOpen={showLogModal} onClose={() => setShowLogModal(false)} logs={dummyLogs} />
             <ConfigPreviewModal isOpen={showConfigModal} onClose={() => setShowConfigModal(false)} config={exp.config || {}} />
+            <SaveToWeightsModal
+              isOpen={saveWeightsModal.isOpen}
+              onClose={() => setSaveWeightsModal({ isOpen: false, exp: null })}
+              onConfirm={handleConfirmSaveWeights}
+              experiment={saveWeightsModal.exp}
+            />
         </div>
     );
   };

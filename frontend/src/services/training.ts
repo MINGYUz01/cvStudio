@@ -133,6 +133,41 @@ export interface CheckpointInfo {
   created_at?: string;
 }
 
+/**
+ * 权重库条目
+ */
+export interface WeightLibraryItem {
+  id: number;
+  name: string;
+  display_name: string;
+  description?: string;
+  task_type: TaskType;
+  version: string;
+  file_name: string;
+  file_size_mb?: number;
+  framework: string;
+  created_at: string;
+}
+
+/**
+ * 保存到权重库请求数据
+ */
+export interface SaveToWeightsRequest {
+  name: string;
+  description?: string;
+  include_last?: boolean;
+}
+
+/**
+ * 保存到权重库响应
+ */
+export interface SaveToWeightsResponse {
+  success: boolean;
+  message: string;
+  best_weight?: WeightLibraryItem;
+  last_weight?: WeightLibraryItem;
+}
+
 // ===== 服务类 =====
 
 /**
@@ -275,6 +310,22 @@ class TrainingServiceClass {
     return apiClient.post<{ success: boolean; message: string; path: string }>(
       `${this.baseUrl}/${id}/save`,
       { weights_dir: weightsDir }
+    );
+  }
+
+  /**
+   * 保存训练模型到权重库
+   * @param id 训练任务ID
+   * @param data 保存数据
+   * @returns 保存响应
+   */
+  async saveToWeights(
+    id: number,
+    data: SaveToWeightsRequest
+  ): Promise<SaveToWeightsResponse> {
+    return apiClient.post<SaveToWeightsResponse>(
+      `${this.baseUrl}/${id}/save-to-weights`,
+      data
     );
   }
 }

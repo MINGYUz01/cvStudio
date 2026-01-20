@@ -177,6 +177,85 @@ class TrainingSaveResponse(BaseModel):
         }
 
 
+class WeightLibraryListItem(BaseModel):
+    """权重库列表项"""
+
+    id: int
+    name: str
+    display_name: str
+    description: Optional[str] = None
+    task_type: str
+    version: str
+    file_name: str
+    file_size_mb: Optional[float] = None
+    framework: str
+    is_auto_detected: bool = False
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class TrainingSaveToWeightsRequest(BaseModel):
+    """保存训练到权重库请求"""
+
+    name: str = Field(..., description="权重名称", min_length=1, max_length=100)
+    description: Optional[str] = Field(None, description="权重描述")
+    include_last: bool = Field(True, description="是否保存最后一个epoch模型")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "name": "ResNet50最佳模型",
+                "description": "在CIFAR-10上训练的最佳模型",
+                "include_last": True
+            }
+        }
+
+
+class TrainingSaveToWeightsResponse(BaseModel):
+    """保存训练到权重库响应"""
+
+    success: bool
+    message: str
+    best_weight: Optional[WeightLibraryListItem] = None
+    last_weight: Optional[WeightLibraryListItem] = None
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "success": True,
+                "message": "权重已保存到权重库",
+                "best_weight": {
+                    "id": 1,
+                    "name": "ResNet50最佳模型",
+                    "display_name": "ResNet50最佳模型 v1.0",
+                    "description": "在CIFAR-10上训练的最佳模型",
+                    "task_type": "classification",
+                    "version": "1.0",
+                    "file_name": "resnet50_best_20250120.pt",
+                    "file_size_mb": 92.5,
+                    "framework": "pytorch",
+                    "is_auto_detected": False,
+                    "created_at": "2025-01-20T12:00:00Z"
+                },
+                "last_weight": {
+                    "id": 2,
+                    "name": "ResNet50最佳模型",
+                    "display_name": "ResNet50最佳模型 v1.1",
+                    "description": "在CIFAR-10上训练的最后epoch模型",
+                    "task_type": "classification",
+                    "version": "1.1",
+                    "file_name": "resnet50_last_20250120.pt",
+                    "file_size_mb": 92.5,
+                    "framework": "pytorch",
+                    "is_auto_detected": False,
+                    "created_at": "2025-01-20T12:00:00Z"
+                }
+            }
+        }
+
+
 class CheckpointInfo(BaseModel):
     """Checkpoint信息"""
 

@@ -554,6 +554,221 @@ class TrainingService:
             self.logger.error(f"保存到权重库失败: {e}")
             raise ValueError(f"保存到权重库失败: {e}")
 
+    def save_to_weights_library(
+        self,
+        training_run_id: int,
+        weight_name: str,
+        description: str,
+        include_last: bool = True,
+        db: Session = None
+    ) -> Dict[str, Any]:
+        """
+        保存训练模型到权重库（带版本管理）
+
+        保存best模型和最后一个epoch模型到权重库。
+        best模型作为主版本（1.0），last模型作为子版本（1.1）。
+
+        Args:
+            training_run_id: 训练任务ID
+            weight_name: 权重名称
+            description: 权重描述
+            include_last: 是否保存最后一个epoch模型
+            db: 数据库会话（可选）
+
+        Returns:
+            {
+                "success": True,
+                "best_weight": {...},  # best模型的权重库记录
+                "last_weight": {...},  # last模型的权重库记录（如果保存）
+            }
+
+        Raises:
+            ValueError: 当训练任务不存在或没有checkpoint时
+        """
+        close_db = False
+        if db is None:
+            from app.database import SessionLocal
+            db = SessionLocal()
+            close_db = True
+
+        try:
+            # 获取训练任务信息
+            training_run = db.query(TrainingRun).filter(
+                TrainingRun.id == training_run_id
+            ).first()
+
+            if not training_run:
+                raise ValueError(f"训练任务不存在: {training_run_id}")
+
+            # 确定任务类型
+            task_type = training_run.hyperparams.get("task_type", "classification")
+            if task_type not in ["classification", "detection"]:
+                task_type = "classification"
+
+            # 获取checkpoint列表 - 使用实验目录中的checkpoint
+            checkpoint_dir = training_run.experiment_dir or f"data/checkpoints/exp_{training_run_id}"
+            checkpoint_manager = CheckpointManager(checkpoint_dir)
+
+            # 先尝试从数据库获取checkpoint记录
+            checkpoints = checkpoint_manager.list_checkpoints(training_run_id, db)
+
+            # 如果数据库中没有记录，尝试从文件系统读取
+            if not checkpoints:
+                import torch
+                checkpoint_files = list(Path(checkpoint_dir).glob("checkpoint_*.pt"))
+                if checkpoint_files:
+                    checkpoints = []
+                    for cf in sorted(checkpoint_files):
+                        try:
+                            ckpt = torch.load(cf, map_location='cpu')
+                            checkpoints.append({
+                                "epoch": ckpt.get("epoch", 0),
+                                "path": str(cf),
+                                "metric_value": ckpt.get("metrics", {}).get("val_acc", 0),
+                                "metrics": ckpt.get("metrics", {}),
+                                "is_best": ckpt.get("is_best", False),
+                                "file_size": cf.stat().st_size
+                            })
+                        except Exception as e:
+                            self.logger.warning(f"无法加载checkpoint文件 {cf}: {e}")
+
+            if not checkpoints:
+                raise ValueError(f"未找到任何checkpoint (run_id: {training_run_id}, 目录: {checkpoint_dir})")
+
+            # 获取best checkpoint
+            best_cp = None
+            last_cp = None
+
+            def is_best_checkpoint(cp):
+                """检查是否为最佳checkpoint（兼容布尔值和字符串）"""
+                val = cp.get("is_best")
+                if isinstance(val, bool):
+                    return val
+                if isinstance(val, str):
+                    return val.lower() == "true"
+                return False
+
+            for cp in checkpoints:
+                if is_best_checkpoint(cp) and not best_cp:
+                    best_cp = cp
+                if not last_cp or cp.get("epoch", 0) > last_cp.get("epoch", 0):
+                    last_cp = cp
+
+            if not best_cp:
+                # 如果没有标记为best的，使用metric_value最高的
+                best_cp = max(checkpoints, key=lambda x: x.get("metric_value", 0))
+
+            if not last_cp:
+                last_cp = checkpoints[0]
+
+            # 导入权重库服务
+            from app.services.weight_library_service import WeightLibraryService
+            weight_service = WeightLibraryService()
+
+            # 确定输入尺寸
+            input_size = training_run.hyperparams.get("input_size", [224, 224])
+            if isinstance(input_size, int):
+                input_size = [input_size, input_size]
+
+            # 1. 保存best模型作为v1.0
+            best_file_path = Path(best_cp["path"])
+            if not best_file_path.exists():
+                raise ValueError(f"Best checkpoint文件不存在: {best_cp['path']}")
+
+            # 生成目标文件名
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            best_filename = f"{weight_name}_best_{timestamp}.pt"
+            last_filename = f"{weight_name}_last_{timestamp}.pt"
+
+            # 确定目标目录
+            target_dir = Path(weight_service.STORAGE_PATH) / task_type
+            target_dir.mkdir(parents=True, exist_ok=True)
+
+            # 复制best模型到权重库
+            best_target_path = target_dir / best_filename
+            import shutil
+            shutil.copy2(best_cp["path"], str(best_target_path))
+
+            # 创建权重库记录
+            from app.models.weight_library import WeightLibrary
+            best_weight = WeightLibrary(
+                name=weight_name,
+                description=f"{description} (最佳模型)" if description else f"{weight_name} - 最佳模型",
+                task_type=task_type,
+                version="1.0",
+                file_path=str(best_target_path),
+                file_name=best_filename,
+                file_size=best_target_path.stat().st_size,
+                framework="pytorch",
+                input_size=input_size,
+                uploaded_by=training_run.created_by
+            )
+            db.add(best_weight)
+            db.flush()  # 获取ID但不提交
+
+            last_weight_record = None
+
+            # 2. 如果需要，保存last模型作为v1.1
+            if include_last:
+                # 检查best和last是否是同一个文件
+                if last_cp["path"] == best_cp["path"]:
+                    # 同一个文件，使用best的文件路径
+                    last_target_path = best_target_path
+                    last_filename_for_db = best_filename
+                else:
+                    # 不同文件，复制last模型
+                    last_target_path = target_dir / last_filename
+                    shutil.copy2(last_cp["path"], str(last_target_path))
+                    last_filename_for_db = last_filename
+
+                last_weight_record = WeightLibrary(
+                    name=weight_name,
+                    description=f"{description} (最后Epoch)" if description else f"{weight_name} - 最后Epoch",
+                    task_type=task_type,
+                    version="1.1",
+                    parent_version_id=best_weight.id,  # 关联到best版本
+                    file_path=str(last_target_path),
+                    file_name=last_filename_for_db,
+                    file_size=last_target_path.stat().st_size,
+                    framework="pytorch",
+                    input_size=input_size,
+                    uploaded_by=training_run.created_by
+                )
+                db.add(last_weight_record)
+
+            # 提交数据库
+            db.commit()
+            db.refresh(best_weight)
+            if last_weight_record:
+                db.refresh(last_weight_record)
+
+            self.logger.success(
+                f"权重已保存到权重库: {weight_name} (best: v{best_weight.version}, last: {last_weight_record.version if last_weight_record else 'N/A'})"
+            )
+
+            # 添加日志
+            experiment_id = f"exp_{training_run_id}"
+            training_logger.add_log(
+                experiment_id,
+                "INFO",
+                f"权重已保存到权重库: {weight_name}",
+                "service"
+            )
+
+            return {
+                "success": True,
+                "best_weight": best_weight,
+                "last_weight": last_weight_record
+            }
+
+        except Exception as e:
+            self.logger.error(f"保存到权重库失败: {e}")
+            db.rollback()
+            raise ValueError(f"保存到权重库失败: {e}")
+        finally:
+            if close_db:
+                db.close()
+
     def get_training_metrics(
         self,
         training_run_id: int,
