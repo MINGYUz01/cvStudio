@@ -31,6 +31,7 @@ class ModelArchitecture(Base):
 
     # 关联关系
     creator = relationship("User", back_populates="model_architectures")
+    weights = relationship("WeightLibrary", back_populates="architecture")
 
     def __repr__(self):
         return f"<ModelArchitecture(id={self.id}, name='{self.name}', version='{self.version}')>"

@@ -52,6 +52,10 @@ class WeightLibraryResponse(WeightLibraryBase):
     is_auto_detected: bool = False
     is_active: str
     parent_version_id: Optional[int] = None
+    source_type: str = "uploaded"
+    source_training_id: Optional[int] = None
+    is_root: bool = True
+    architecture_id: Optional[int] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
 
@@ -71,6 +75,9 @@ class WeightLibraryListItem(BaseModel):
     file_size_mb: Optional[float] = None
     framework: str
     is_auto_detected: bool = False
+    is_root: bool = True
+    source_type: str = "uploaded"
+    architecture_id: Optional[int] = None
     created_at: datetime
 
     class Config:
@@ -142,3 +149,86 @@ class WeightMetadata(BaseModel):
     output_shape: Optional[List[int]] = None
     input_name: Optional[str] = None
     output_names: Optional[List[str]] = None
+
+
+# ==================== 权重树形结构相关模式 ====================
+
+class WeightTreeItem(BaseModel):
+    """权重树节点模式"""
+    id: int
+    name: str
+    display_name: str
+    description: Optional[str] = None
+    task_type: str
+    version: str
+    file_name: str
+    file_size_mb: Optional[float] = None
+    framework: str
+    is_auto_detected: bool = False
+    source_type: str = "uploaded"
+    source_training_id: Optional[int] = None
+    is_root: bool = True
+    architecture_id: Optional[int] = None
+    parent_version_id: Optional[int] = None
+    created_at: datetime
+    children: List['WeightTreeItem'] = []
+
+    class Config:
+        from_attributes = True
+
+
+class WeightTreeResponse(BaseModel):
+    """权重树响应模式"""
+    id: int
+    name: str
+    display_name: str
+    description: Optional[str] = None
+    task_type: str
+    version: str
+    file_name: str
+    file_size_mb: Optional[float] = None
+    framework: str
+    is_auto_detected: bool = False
+    is_root: bool
+    source_type: str
+    source_training_id: Optional[int] = None
+    architecture_id: Optional[int] = None
+    parent_version_id: Optional[int] = None
+    created_at: datetime
+    children: List['WeightTreeItem'] = []
+
+    class Config:
+        from_attributes = True
+
+
+# 更新forward引用
+WeightTreeResponse.model_rebuild()
+WeightTreeItem.model_rebuild()
+
+
+class WeightRootList(BaseModel):
+    """根节点权重列表响应模式"""
+    weights: List[WeightLibraryListItem]
+    total: int
+
+
+class WeightTrainingConfigResponse(BaseModel):
+    """权重训练配置响应模式"""
+    weight_id: int
+    weight_name: str
+    training_config: Optional[Dict[str, Any]] = None
+    source_training: Optional[Dict[str, Any]] = None
+
+
+class WeightForTraining(BaseModel):
+    """可用于训练的权重模式"""
+    id: int
+    name: str
+    display_name: str
+    description: Optional[str] = None
+    task_type: str
+    version: str
+    file_path: str
+    architecture_id: Optional[int] = None
+    architecture_name: Optional[str] = None
+    created_at: datetime

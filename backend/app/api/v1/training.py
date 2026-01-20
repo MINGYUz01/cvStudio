@@ -146,7 +146,8 @@ async def create_training_run(
             model_id=training_data.model_id,
             dataset_id=training_data.dataset_id,
             config=training_data.config,
-            user_id=training_data.user_id
+            user_id=training_data.user_id,
+            pretrained_weight_id=training_data.pretrained_weight_id
         )
 
         debug_log(f"训练任务创建成功: id={training_run.id}, status={training_run.status}")

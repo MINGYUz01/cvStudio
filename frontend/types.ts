@@ -68,12 +68,56 @@ export interface WeightCheckpoint {
   file_size_mb?: number;
   framework: 'pytorch' | 'onnx';
   created_at: string;
+  is_root?: boolean;
+  source_type?: 'uploaded' | 'trained';
+  architecture_id?: number;
+  parent_version_id?: number;
   // Legacy fields for backward compatibility
   architecture?: string;  // Can be derived from task_type
   format?: 'PyTorch' | 'ONNX' | 'TensorRT';  // Mapped from framework
   size?: string;  // Can be derived from file_size_mb
   accuracy?: string;  // Not in DB, optional
   tags?: string[];  // Not in DB, optional
+}
+
+// ==================== 权重树形结构相关类型 ====================
+
+export interface WeightTreeItem extends WeightCheckpoint {
+  is_root: boolean;
+  source_type: 'uploaded' | 'trained';
+  source_training_id?: number;
+  architecture_id?: number;
+  parent_version_id?: number;
+  children: WeightTreeItem[];
+}
+
+export interface WeightTrainingConfig {
+  weight_id: number;
+  weight_name: string;
+  training_config: Record<string, any> | null;
+  source_training: {
+    id: number;
+    name: string;
+    hyperparams: Record<string, any>;
+  } | null;
+}
+
+export interface WeightForTrainingOption {
+  id: number;
+  name: string;
+  display_name: string;
+  description?: string;
+  task_type: 'classification' | 'detection';
+  version: string;
+  file_path: string;
+  architecture_id?: number;
+  architecture_name?: string;
+  created_at: string;
+}
+
+export interface WeightRootListResponse {
+  weights: WeightCheckpoint[];
+  total: number;
 }
 
 // ==================== 数据增强相关类型 ====================

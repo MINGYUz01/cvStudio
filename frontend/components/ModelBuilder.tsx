@@ -5,14 +5,15 @@ import {
   CheckCircle, AlertTriangle, Code, Info, X, Copy,
   Layout, Package, Box, AlertOctagon, HelpCircle,
   Database, HardDrive, Download, Upload, Tag,
-  Loader2, FileText
+  Loader2, FileText, FolderOpen, ChevronLeft, ChevronRight
 } from 'lucide-react';
-import { ModelNode, WeightCheckpoint } from '../types';
+import { ModelNode, WeightCheckpoint, WeightTreeItem } from '../types';
 import modelsAPI from '../src/services/models';
 import { weightService, TaskType } from '../src/services/weights';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from 'recharts';
 import CodePreviewModal from './CodePreviewModal';
 import InputModal from './InputModal';
+import WeightTreeView from './WeightTreeView';
 
 // 统计图表颜色
 const CHART_COLORS = ['#22d3ee', '#a855f7', '#f43f5e', '#fbbf24', '#34d399', '#60a5fa'];
@@ -256,6 +257,10 @@ const ModelBuilder: React.FC = () => {
   // Weights State
   const [weights, setWeights] = useState<WeightCheckpoint[]>([]);
   const [isLoadingWeights, setIsLoadingWeights] = useState(false);
+  const [rootWeights, setRootWeights] = useState<WeightCheckpoint[]>([]);
+  const [weightTree, setWeightTree] = useState<WeightTreeItem[]>([]);
+  const [selectedWeight, setSelectedWeight] = useState<WeightTreeItem | null>(null);
+  const [weightView, setWeightView] = useState<'list' | 'tree'>('list');
 
   // Generated Model Files State
   const [generatedFiles, setGeneratedFiles] = useState<Array<{id: number, filename: string, name: string, size: number, created: string}>>([]);
@@ -466,15 +471,19 @@ const ModelBuilder: React.FC = () => {
   const loadServerWeights = async () => {
     setIsLoadingWeights(true);
     try {
-      const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1'}/weights`, {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('access_token')}`,
-        },
-      });
+      // 并行加载所有权重和根节点权重
+      const [allResponse, rootsResponse] = await Promise.all([
+        fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1'}/weights`, {
+          headers: { 'Authorization': `Bearer ${localStorage.getItem('access_token')}` },
+        }),
+        fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1'}/weights/roots`, {
+          headers: { 'Authorization': `Bearer ${localStorage.getItem('access_token')}` },
+        }),
+      ]);
 
-      if (response.ok) {
-        const data = await response.json();
-        // 将服务器权重转换为 WeightCheckpoint 格式
+      // 处理所有权重
+      if (allResponse.ok) {
+        const data = await allResponse.json();
         const serverWeights: WeightCheckpoint[] = (data.weights || []).map((w: any) => ({
           id: w.id,
           name: w.name,
@@ -486,8 +495,10 @@ const ModelBuilder: React.FC = () => {
           file_size: w.file_size,
           file_size_mb: w.file_size_mb,
           framework: w.framework,
+          is_root: w.is_root,
+          source_type: w.source_type,
+          architecture_id: w.architecture_id,
           created_at: w.created_at,
-          // Legacy fields for UI compatibility
           architecture: w.task_type === 'classification' ? 'Classifier' :
                        w.task_type === 'detection' ? 'YOLOv8' : 'Unknown',
           format: w.framework === 'pytorch' ? 'PyTorch' : 'ONNX',
@@ -495,11 +506,58 @@ const ModelBuilder: React.FC = () => {
         }));
         setWeights(serverWeights);
       }
+
+      // 处理根节点权重
+      if (rootsResponse.ok) {
+        const rootsData = await rootsResponse.json();
+        const rootWeightsData: WeightCheckpoint[] = (rootsData.weights || []).map((w: any) => ({
+          id: w.id,
+          name: w.name,
+          display_name: w.display_name || `${w.name} v${w.version}`,
+          description: w.description,
+          task_type: w.task_type,
+          version: w.version,
+          file_name: w.file_name,
+          file_size: w.file_size,
+          file_size_mb: w.file_size_mb,
+          framework: w.framework,
+          is_root: w.is_root,
+          source_type: w.source_type,
+          architecture_id: w.architecture_id,
+          created_at: w.created_at,
+          architecture: w.task_type === 'classification' ? 'Classifier' :
+                       w.task_type === 'detection' ? 'YOLOv8' : 'Unknown',
+          format: w.framework === 'pytorch' ? 'PyTorch' : 'ONNX',
+          size: w.file_size_mb ? `${w.file_size_mb} MB` : 'Unknown',
+        }));
+        setRootWeights(rootWeightsData);
+      }
     } catch (error) {
       console.error('加载服务器权重列表失败:', error);
       setWeights([]);
+      setRootWeights([]);
     } finally {
       setIsLoadingWeights(false);
+    }
+  };
+
+  // 加载权重树
+  const loadWeightTree = async () => {
+    try {
+      const data = await weightService.getWeightTree();
+      setWeightTree(data);
+    } catch (error) {
+      console.error('加载权重树失败:', error);
+    }
+  };
+
+  // 选择权重查看详情
+  const handleWeightSelect = async (weight: WeightCheckpoint) => {
+    try {
+      const subtree = await weightService.getWeightSubtree(weight.id);
+      setSelectedWeight(subtree);
+    } catch (error) {
+      console.error('加载权重详情失败:', error);
     }
   };
 
@@ -1306,7 +1364,26 @@ const ModelBuilder: React.FC = () => {
               },
           }).then(async (response) => {
               if (response.ok) {
+                  // 更新所有相关状态
                   setWeights(prev => prev.filter(w => w.id !== weightId));
+                  setRootWeights(prev => prev.filter(w => w.id !== weightId));
+                  setWeightTree(prev => {
+                      // 递归删除指定ID的节点
+                      const removeFromTree = (nodes: WeightTreeItem[]): WeightTreeItem[] => {
+                          return nodes.filter(node => {
+                              if (node.id === weightId) return false;
+                              if (node.children && node.children.length > 0) {
+                                  node.children = removeFromTree(node.children);
+                              }
+                              return true;
+                          });
+                      };
+                      return removeFromTree(prev);
+                  });
+                  // 如果删除的是当前选中的权重，清空选中状态
+                  if (selectedWeight?.id === weightId) {
+                      setSelectedWeight(null);
+                  }
                   showNotification("权重文件已删除", "success");
               } else {
                   const error = await response.json();
@@ -2233,86 +2310,240 @@ const ModelBuilder: React.FC = () => {
 
             {/* VIEW 3: WEIGHT REGISTRY (New) */}
             {activeTab === 'weights' && (
-                <div className="h-full flex flex-col p-8 pt-4 overflow-y-auto custom-scrollbar">
-                    <div className="flex justify-between items-center mb-6">
+                <div className="h-full flex flex-col overflow-hidden">
+                    {/* Header */}
+                    <div className="flex justify-between items-center p-8 pt-4 pb-4">
                         <div>
                             <h2 className="text-2xl font-bold text-white mb-2">权重库</h2>
-                            <p className="text-slate-400 text-sm">管理已训练的模型权重文件 (Checkpoints)。</p>
+                            <p className="text-slate-400 text-sm">管理已训练的模型权重文件，支持版本树形结构展示。</p>
                         </div>
-                        <button onClick={() => setShowWeightUpload(true)} className="px-6 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold rounded-xl border border-slate-700 flex items-center transition-all">
-                            <Upload size={18} className="mr-2" /> 导入权重
-                        </button>
+                        <div className="flex items-center space-x-3">
+                            {/* View Toggle */}
+                            <div className="flex bg-slate-900 rounded-lg p-1 border border-slate-800">
+                                <button
+                                    onClick={() => setWeightView('list')}
+                                    className={`px-3 py-1.5 rounded-md text-sm font-medium flex items-center transition-all ${
+                                        weightView === 'list' ? 'bg-slate-700 text-cyan-400' : 'text-slate-400 hover:text-slate-200'
+                                    }`}
+                                >
+                                    <Database size={14} className="mr-2" /> 列表
+                                </button>
+                                <button
+                                    onClick={() => { setWeightView('tree'); loadWeightTree(); }}
+                                    className={`px-3 py-1.5 rounded-md text-sm font-medium flex items-center transition-all ${
+                                        weightView === 'tree' ? 'bg-slate-700 text-cyan-400' : 'text-slate-400 hover:text-slate-200'
+                                    }`}
+                                >
+                                    <GitBranch size={14} className="mr-2" /> 树形图
+                                </button>
+                            </div>
+                            <button onClick={() => setShowWeightUpload(true)} className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold rounded-xl border border-slate-700 flex items-center transition-all">
+                                <Upload size={16} className="mr-2" /> 导入权重
+                            </button>
+                        </div>
                     </div>
 
-                    <div className="glass-panel rounded-xl border border-slate-800 overflow-hidden">
-                        {isLoadingWeights ? (
-                            <div className="p-12 text-center text-slate-500 flex flex-col items-center">
-                                <Loader2 size={32} className="animate-spin mb-4 opacity-50" />
-                                <p>加载权重列表中...</p>
+                    {/* Content Area */}
+                    <div className="flex-1 flex overflow-hidden px-8 pb-8">
+                        {/* Left Panel - Weight List or Tree */}
+                        <div className={`${selectedWeight ? 'w-1/2 pr-4' : 'w-full'} flex flex-col`}>
+                            <div className="glass-panel rounded-xl border border-slate-800 overflow-hidden flex-1 flex flex-col">
+                                {isLoadingWeights ? (
+                                    <div className="p-12 text-center text-slate-500 flex flex-col items-center">
+                                        <Loader2 size={32} className="animate-spin mb-4 opacity-50" />
+                                        <p>加载权重列表中...</p>
+                                    </div>
+                                ) : weightView === 'list' ? (
+                                    /* List View */
+                                    <>
+                                        <div className="overflow-auto flex-1">
+                                            <table className="w-full text-left border-collapse">
+                                                <thead className="bg-slate-900/80 backdrop-blur text-xs font-bold text-slate-500 uppercase tracking-wider sticky top-0">
+                                                    <tr>
+                                                        <th className="p-4 border-b border-slate-800">权重名称</th>
+                                                        <th className="p-4 border-b border-slate-800">任务类型</th>
+                                                        <th className="p-4 border-b border-slate-800">版本</th>
+                                                        <th className="p-4 border-b border-slate-800">大小</th>
+                                                        <th className="p-4 border-b border-slate-800">来源</th>
+                                                        <th className="p-4 border-b border-slate-800">创建时间</th>
+                                                        <th className="p-4 border-b border-slate-800 text-right">操作</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody className="divide-y divide-slate-800 text-sm">
+                                                    {rootWeights.map(w => (
+                                                        <tr key={w.id} className="hover:bg-slate-800/50 transition-colors group">
+                                                            <td className="p-4">
+                                                                <div className="flex items-center">
+                                                                    <div className={`w-8 h-8 rounded flex items-center justify-center mr-3 ${
+                                                                        w.source_type === 'trained' ? 'bg-purple-900/20 text-purple-400' : 'bg-emerald-900/20 text-emerald-400'
+                                                                    }`}>
+                                                                        {w.source_type === 'trained' ? <GitBranch size={16} /> : <Database size={16} />}
+                                                                    </div>
+                                                                    <div>
+                                                                        <div className="font-bold text-white group-hover:text-cyan-400 transition-colors cursor-pointer"
+                                                                            onClick={() => handleWeightSelect(w)}>
+                                                                            {w.display_name || w.name}
+                                                                        </div>
+                                                                        <div className="text-xs text-slate-500">{w.file_name}</div>
+                                                                    </div>
+                                                                </div>
+                                                            </td>
+                                                            <td className="p-4">
+                                                                <span className={`px-2 py-1 rounded text-xs font-medium ${
+                                                                    w.task_type === 'classification' ? 'bg-cyan-900/30 text-cyan-400 border border-cyan-800' :
+                                                                    w.task_type === 'detection' ? 'bg-purple-900/30 text-purple-400 border border-purple-800' :
+                                                                    'bg-slate-800 text-slate-400'
+                                                                }`}>
+                                                                    {w.task_type === 'classification' ? '分类' :
+                                                                    w.task_type === 'detection' ? '检测' : w.task_type}
+                                                                </span>
+                                                            </td>
+                                                            <td className="p-4 text-slate-500 font-mono text-xs">{w.version}</td>
+                                                            <td className="p-4 text-slate-400 font-mono">{w.file_size_mb?.toFixed(2) || '-'} MB</td>
+                                                            <td className="p-4">
+                                                                <span className={`px-2 py-1 rounded text-xs font-medium ${
+                                                                    w.source_type === 'trained' ? 'bg-purple-900/30 text-purple-400' : 'bg-emerald-900/30 text-emerald-400'
+                                                                }`}>
+                                                                    {w.source_type === 'trained' ? '训练' : '导入'}
+                                                                </span>
+                                                            </td>
+                                                            <td className="p-4 text-slate-500 text-xs">{w.created_at ? new Date(w.created_at).toLocaleDateString() : '-'}</td>
+                                                            <td className="p-4 text-right">
+                                                                <div className="flex justify-end space-x-2">
+                                                                    <button
+                                                                        onClick={() => handleWeightSelect(w)}
+                                                                        className="p-2 text-slate-500 hover:text-cyan-400 bg-slate-900/50 hover:bg-slate-900 rounded-lg transition-colors"
+                                                                        title="查看版本树"
+                                                                    >
+                                                                        <FolderOpen size={14} />
+                                                                    </button>
+                                                                    <button onClick={() => handleDeleteWeight(w.id)} className="p-2 text-slate-500 hover:text-rose-400 bg-slate-900/50 hover:bg-slate-900 rounded-lg transition-colors" title="删除">
+                                                                        <Trash2 size={14} />
+                                                                    </button>
+                                                                </div>
+                                                            </td>
+                                                        </tr>
+                                                    ))}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                        {rootWeights.length === 0 && (
+                                            <div className="p-12 text-center text-slate-500">
+                                                <Database size={48} className="mx-auto mb-4 opacity-20" />
+                                                <p>暂无权重文件，请完成训练后保存</p>
+                                            </div>
+                                        )}
+                                    </>
+                                ) : (
+                                    /* Tree View */
+                                    <div className="flex-1 overflow-auto p-4">
+                                        {weightTree.length > 0 ? (
+                                            <div className="space-y-2">
+                                                {weightTree.map(tree => (
+                                                    <div key={tree.id} className="border border-slate-800 rounded-lg overflow-hidden">
+                                                        <WeightTreeView
+                                                            tree={tree}
+                                                            onNodeClick={(node) => setSelectedWeight(node)}
+                                                            selectedId={selectedWeight?.id}
+                                                        />
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        ) : (
+                                            <div className="p-12 text-center text-slate-500">
+                                                <GitBranch size={48} className="mx-auto mb-4 opacity-20" />
+                                                <p>暂无权重版本树</p>
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
                             </div>
-                        ) : (
-                            <table className="w-full text-left border-collapse">
-                                <thead className="bg-slate-900/80 backdrop-blur text-xs font-bold text-slate-500 uppercase tracking-wider">
-                                    <tr>
-                                        <th className="p-4 border-b border-slate-800">Filename</th>
-                                        <th className="p-4 border-b border-slate-800">Task Type</th>
-                                        <th className="p-4 border-b border-slate-800">Format</th>
-                                        <th className="p-4 border-b border-slate-800">Version</th>
-                                        <th className="p-4 border-b border-slate-800">Size</th>
-                                        <th className="p-4 border-b border-slate-800">Created</th>
-                                        <th className="p-4 border-b border-slate-800 text-right">Actions</th>
-                                    </tr>
-                                </thead>
-                                <tbody className="divide-y divide-slate-800 text-sm">
-                                    {weights.map(w => (
-                                        <tr key={w.id} className="hover:bg-slate-800/50 transition-colors group">
-                                            <td className="p-4">
-                                                <div className="flex items-center">
-                                                    <div className="w-8 h-8 rounded bg-emerald-900/20 text-emerald-400 flex items-center justify-center mr-3">
-                                                        <HardDrive size={16} />
-                                                    </div>
-                                                    <div>
-                                                        <div className="font-bold text-white group-hover:text-emerald-400 transition-colors">{w.display_name || w.name}</div>
-                                                        <div className="text-xs text-slate-500">{w.file_name}</div>
-                                                        {w.description && (
-                                                            <div className="text-xs text-slate-400 mt-1">{w.description}</div>
-                                                        )}
-                                                    </div>
+                        </div>
+
+                        {/* Right Panel - Weight Detail */}
+                        {selectedWeight && (
+                            <div className="w-1/2 pl-4">
+                                <div className="glass-panel rounded-xl border border-slate-800 overflow-hidden flex flex-col h-full">
+                                    {/* Detail Header */}
+                                    <div className="p-4 border-b border-slate-800 bg-slate-900/50 flex justify-between items-center">
+                                        <h3 className="font-bold text-white">权重详情</h3>
+                                        <button onClick={() => setSelectedWeight(null)} className="p-1 text-slate-400 hover:text-white">
+                                            <X size={18} />
+                                        </button>
+                                    </div>
+
+                                    {/* Detail Content */}
+                                    <div className="flex-1 overflow-auto p-4">
+                                        {/* Basic Info */}
+                                        <div className="mb-6">
+                                            <h4 className="text-sm font-bold text-slate-500 uppercase mb-3">基本信息</h4>
+                                            <div className="space-y-2 text-sm">
+                                                <div className="flex justify-between">
+                                                    <span className="text-slate-400">名称</span>
+                                                    <span className="text-white font-medium">{selectedWeight.display_name}</span>
                                                 </div>
-                                            </td>
-                                            <td className="p-4">
-                                                <span className={`px-2 py-1 rounded text-xs font-medium ${
-                                                    w.task_type === 'classification' ? 'bg-cyan-900/30 text-cyan-400 border border-cyan-800' :
-                                                    w.task_type === 'detection' ? 'bg-purple-900/30 text-purple-400 border border-purple-800' :
-                                                    'bg-slate-800 text-slate-400'
-                                                }`}>
-                                                    {w.task_type === 'classification' ? '分类' :
-                                                     w.task_type === 'detection' ? '检测' : w.task_type}
-                                                </span>
-                                            </td>
-                                            <td className="p-4 text-slate-400">{w.format || w.framework}</td>
-                                            <td className="p-4 text-slate-500 font-mono text-xs">{w.version}</td>
-                                            <td className="p-4 text-slate-400 font-mono">{w.size || w.file_size_mb?.toFixed(2) + ' MB' || '-'}</td>
-                                            <td className="p-4 text-slate-500 text-xs">{w.created_at ? new Date(w.created_at).toLocaleDateString() : '-'}</td>
-                                            <td className="p-4 text-right">
-                                                <div className="flex justify-end space-x-2">
-                                                    <button className="p-2 text-slate-500 hover:text-cyan-400 bg-slate-900/50 hover:bg-slate-900 rounded-lg transition-colors" title="Download">
-                                                        <Download size={14} />
-                                                    </button>
-                                                    <button onClick={() => handleDeleteWeight(w.id)} className="p-2 text-slate-500 hover:text-rose-400 bg-slate-900/50 hover:bg-slate-900 rounded-lg transition-colors" title="Delete">
-                                                        <Trash2 size={14} />
-                                                    </button>
+                                                <div className="flex justify-between">
+                                                    <span className="text-slate-400">版本</span>
+                                                    <span className="text-cyan-400 font-mono">v{selectedWeight.version}</span>
                                                 </div>
-                                            </td>
-                                        </tr>
-                                    ))}
-                                </tbody>
-                            </table>
-                        )}
-                        {!isLoadingWeights && weights.length === 0 && (
-                            <div className="p-12 text-center text-slate-500">
-                                <Database size={48} className="mx-auto mb-4 opacity-20" />
-                                <p>暂无权重文件，请完成训练后保存</p>
+                                                <div className="flex justify-between">
+                                                    <span className="text-slate-400">任务类型</span>
+                                                    <span className={`px-2 py-0.5 rounded text-xs font-medium ${
+                                                        selectedWeight.task_type === 'classification' ? 'bg-cyan-900/30 text-cyan-400' :
+                                                        selectedWeight.task_type === 'detection' ? 'bg-purple-900/30 text-purple-400' :
+                                                        'bg-slate-800 text-slate-400'
+                                                    }`}>
+                                                        {selectedWeight.task_type === 'classification' ? '分类' :
+                                                        selectedWeight.task_type === 'detection' ? '检测' : selectedWeight.task_type}
+                                                    </span>
+                                                </div>
+                                                <div className="flex justify-between">
+                                                    <span className="text-slate-400">来源</span>
+                                                    <span className={`px-2 py-0.5 rounded text-xs font-medium ${
+                                                        selectedWeight.source_type === 'trained' ? 'bg-purple-900/30 text-purple-400' : 'bg-emerald-900/30 text-emerald-400'
+                                                    }`}>
+                                                        {selectedWeight.source_type === 'trained' ? '训练生成' : '导入'}
+                                                    </span>
+                                                </div>
+                                                <div className="flex justify-between">
+                                                    <span className="text-slate-400">文件大小</span>
+                                                    <span className="text-slate-300">{selectedWeight.file_size_mb?.toFixed(2)} MB</span>
+                                                </div>
+                                                <div className="flex justify-between">
+                                                    <span className="text-slate-400">创建时间</span>
+                                                    <span className="text-slate-300">{selectedWeight.created_at ? new Date(selectedWeight.created_at).toLocaleString() : '-'}</span>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        {/* Version Tree */}
+                                        {selectedWeight.children && selectedWeight.children.length > 0 && (
+                                            <div className="mb-6">
+                                                <h4 className="text-sm font-bold text-slate-500 uppercase mb-3">版本树</h4>
+                                                <div className="border border-slate-800 rounded-lg overflow-hidden bg-slate-950/50">
+                                                    <WeightTreeView
+                                                        tree={selectedWeight}
+                                                        onNodeClick={(node) => setSelectedWeight(node)}
+                                                        selectedId={selectedWeight?.id}
+                                                    />
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        {/* Training Config */}
+                                        {selectedWeight.source_type === 'trained' && (
+                                            <div>
+                                                <h4 className="text-sm font-bold text-slate-500 uppercase mb-3">训练信息</h4>
+                                                <div className="p-3 bg-slate-950/50 border border-slate-800 rounded-lg text-sm text-slate-400">
+                                                    <p>此权重由训练生成，版本号 v{selectedWeight.version}</p>
+                                                    {selectedWeight.source_training_id && (
+                                                        <p className="mt-2">来源训练任务ID: {selectedWeight.source_training_id}</p>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
                             </div>
                         )}
                     </div>

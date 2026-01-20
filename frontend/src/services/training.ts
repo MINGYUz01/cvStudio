@@ -62,6 +62,7 @@ export interface TrainingRunCreateData {
   dataset_id: number;
   config: TrainingConfig;
   user_id: number;
+  pretrained_weight_id?: number;
 }
 
 /**
@@ -74,6 +75,7 @@ export interface TrainingConfig {
   learning_rate: number;
   optimizer: string;
   device: string;
+  pretrained_weight_id?: number;
   [key: string]: any;
 }
 

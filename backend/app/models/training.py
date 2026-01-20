@@ -31,6 +31,7 @@ class TrainingRun(Base):
     start_time = Column(DateTime(timezone=True), nullable=True)
     end_time = Column(DateTime(timezone=True), nullable=True)
     created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    pretrained_weight_id = Column(Integer, ForeignKey("weight_library.id"), nullable=True, comment="预训练权重ID")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
@@ -39,6 +40,7 @@ class TrainingRun(Base):
     dataset = relationship("Dataset")
     creator = relationship("User")
     checkpoints = relationship("Checkpoint", back_populates="training_run")
+    pretrained_weight = relationship("WeightLibrary", foreign_keys=[pretrained_weight_id])
 
     def __repr__(self):
         return f"<TrainingRun(id={self.id}, name='{self.name}', status='{self.status}')>"

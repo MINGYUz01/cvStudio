@@ -47,6 +47,12 @@ class WeightLibrary(Base):
     # 自动检测标记
     is_auto_detected = Column(Boolean, default=False, comment="任务类型是否自动检测")
 
+    # 版本管理增强
+    source_type = Column(String(20), default="uploaded", comment="来源类型: uploaded/trained")
+    source_training_id = Column(Integer, ForeignKey("training_runs.id"), nullable=True, comment="来源训练任务ID")
+    is_root = Column(Boolean, default=True, comment="是否为根节点(导入权重或best权重)")
+    architecture_id = Column(Integer, ForeignKey("model_architectures.id"), nullable=True, comment="关联的模型架构ID")
+
     # 用户信息
     uploaded_by = Column(Integer, ForeignKey("users.id"), nullable=True, comment="上传用户ID")
 
@@ -58,6 +64,8 @@ class WeightLibrary(Base):
     uploader = relationship("User", back_populates="uploaded_weights")
     parent_version = relationship("WeightLibrary", remote_side=[id], foreign_keys=[parent_version_id])
     child_versions = relationship("WeightLibrary", foreign_keys=[parent_version_id], remote_side=[id], overlaps="parent_version")
+    source_training = relationship("TrainingRun", foreign_keys=[source_training_id])
+    architecture = relationship("ModelArchitecture", back_populates="weights")
 
     def __repr__(self):
         return f"<WeightLibrary(id={self.id}, name='{self.name}', task_type='{self.task_type}', version='{self.version}')>"
@@ -83,6 +91,11 @@ class WeightLibrary(Base):
             "input_size": self.input_size,
             "class_names": self.class_names,
             "is_auto_detected": self.is_auto_detected,
+            "source_type": self.source_type,
+            "source_training_id": self.source_training_id,
+            "is_root": self.is_root,
+            "architecture_id": self.architecture_id,
+            "parent_version_id": self.parent_version_id,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }

@@ -17,6 +17,7 @@ class TrainingRunCreate(BaseModel):
     dataset_id: int = Field(..., description="数据集ID")
     config: Dict[str, Any] = Field(..., description="训练配置参数")
     user_id: int = Field(..., description="创建用户ID")
+    pretrained_weight_id: Optional[int] = Field(None, description="预训练权重ID")
 
     class Config:
         json_schema_extra = {

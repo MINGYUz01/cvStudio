@@ -35,6 +35,10 @@ export interface WeightLibraryItem {
   file_size_mb?: number;
   framework: Framework;
   is_auto_detected: boolean;
+  is_root?: boolean;
+  source_type?: 'uploaded' | 'trained';
+  architecture_id?: number;
+  parent_version_id?: number;
   created_at: string;
 }
 
@@ -57,6 +61,47 @@ export interface WeightUploadOptions {
   input_size?: number[];
   class_names?: string[];
   normalize_params?: Record<string, any>;
+}
+
+// ==============================
+// 权重树形结构相关类型
+// ==============================
+
+export interface WeightTreeItem extends WeightLibraryItem {
+  is_root: boolean;
+  source_type: 'uploaded' | 'trained';
+  source_training_id?: number;
+  architecture_id?: number;
+  children: WeightTreeItem[];
+}
+
+export interface WeightRootListResponse {
+  weights: WeightLibraryItem[];
+  total: number;
+}
+
+export interface WeightTrainingConfig {
+  weight_id: number;
+  weight_name: string;
+  training_config: Record<string, any> | null;
+  source_training: {
+    id: number;
+    name: string;
+    hyperparams: Record<string, any>;
+  } | null;
+}
+
+export interface WeightForTrainingOption {
+  id: number;
+  name: string;
+  display_name: string;
+  description?: string;
+  task_type: TaskType;
+  version: string;
+  file_path: string;
+  architecture_id?: number;
+  architecture_name?: string;
+  created_at: string;
 }
 
 // ==============================
@@ -229,6 +274,52 @@ class WeightService {
    */
   async getWeightsByTask(taskType: TaskType): Promise<WeightLibraryListResponse> {
     return await apiClient.get<WeightLibraryListResponse>(`/weights/by-task/${taskType}`);
+  }
+
+  // ==============================
+  // 权重树形结构相关API方法
+  // ==============================
+
+  /**
+   * 获取根节点权重列表
+   */
+  async getRootWeights(taskType?: TaskType): Promise<WeightRootListResponse> {
+    const params = taskType ? { task_type: taskType } : undefined;
+    return await apiClient.get<WeightRootListResponse>('/weights/roots', params);
+  }
+
+  /**
+   * 获取完整的权重树形结构
+   */
+  async getWeightTree(): Promise<WeightTreeItem[]> {
+    return await apiClient.get<WeightTreeItem[]>('/weights/tree');
+  }
+
+  /**
+   * 获取指定权重的子树
+   */
+  async getWeightSubtree(weightId: number): Promise<WeightTreeItem> {
+    return await apiClient.get<WeightTreeItem>(`/weights/${weightId}/tree`);
+  }
+
+  /**
+   * 获取权重的训练配置信息
+   */
+  async getWeightTrainingConfig(weightId: number): Promise<WeightTrainingConfig> {
+    return await apiClient.get<WeightTrainingConfig>(`/weights/${weightId}/config`);
+  }
+
+  /**
+   * 获取可用于训练的权重列表（根据架构筛选）
+   */
+  async getWeightsForTraining(
+    architectureId?: number,
+    taskType?: TaskType
+  ): Promise<WeightForTrainingOption[]> {
+    const params: any = {};
+    if (architectureId) params.architecture_id = architectureId;
+    if (taskType) params.task_type = taskType;
+    return await apiClient.get<WeightForTrainingOption[]>('/weights/for-training', params);
   }
 }
 

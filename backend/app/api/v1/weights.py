@@ -24,6 +24,11 @@ from app.schemas.weight_library import (
     TaskTypeDetectionResponse,
     WeightVersionCreate,
     WeightVersionHistory,
+    WeightRootList,
+    WeightTreeItem,
+    WeightTreeResponse,
+    WeightTrainingConfigResponse,
+    WeightForTraining,
 )
 from app.dependencies import get_db
 from loguru import logger
@@ -185,6 +190,189 @@ async def list_weights(
         raise HTTPException(500, f"获取权重列表失败: {str(e)}")
 
 
+# ==============================
+# 权重树形结构相关端点
+# 注意：这些特定路径必须在 /{weight_id} 之前定义！
+# ==============================
+
+@router.get("/roots", response_model=WeightRootList)
+async def get_root_weights(
+    task_type: Optional[str] = Query(None, description="过滤任务类型"),
+    skip: int = Query(0, ge=0, description="跳过数量"),
+    limit: int = Query(100, ge=1, le=100, description="返回数量"),
+    db: Session = Depends(get_db)
+):
+    """
+    获取根节点权重列表
+
+    只返回is_root=True的权重（导入的权重和训练best权重）
+    """
+    try:
+        weights = weight_service.get_root_weights(
+            db=db,
+            task_type=task_type,
+            skip=skip,
+            limit=limit
+        )
+
+        # 统计总数
+        total = len(weight_service.get_root_weights(
+            db=db,
+            task_type=task_type,
+            skip=0,
+            limit=10000
+        ))
+
+        items = []
+        for weight in weights:
+            items.append(WeightLibraryListItem(
+                id=weight.id,
+                name=weight.name,
+                display_name=weight.display_name,
+                description=weight.description,
+                task_type=weight.task_type,
+                version=weight.version,
+                file_name=weight.file_name,
+                file_size_mb=round(weight.file_size / 1024 / 1024, 2) if weight.file_size else None,
+                framework=weight.framework,
+                is_auto_detected=weight.is_auto_detected,
+                is_root=weight.is_root,
+                source_type=weight.source_type,
+                architecture_id=weight.architecture_id,
+                created_at=weight.created_at
+            ))
+
+        return WeightRootList(
+            weights=items,
+            total=total
+        )
+
+    except Exception as e:
+        logger.error(f"获取根节点权重列表失败: {e}")
+        raise HTTPException(500, f"获取根节点权重列表失败: {str(e)}")
+
+
+@router.get("/tree", response_model=List[WeightTreeResponse])
+async def get_weight_tree(
+    db: Session = Depends(get_db)
+):
+    """
+    获取完整的权重树形结构
+
+    返回所有根节点及其子节点组成的树
+    """
+    try:
+        trees = weight_service.build_weight_tree(db)
+        return trees
+
+    except Exception as e:
+        logger.error(f"获取权重树失败: {e}")
+        raise HTTPException(500, f"获取权重树失败: {str(e)}")
+
+
+@router.get("/for-training", response_model=List[WeightForTraining])
+async def get_weights_for_training(
+    architecture_id: Optional[int] = Query(None, description="模型架构ID"),
+    task_type: Optional[str] = Query(None, description="任务类型"),
+    db: Session = Depends(get_db)
+):
+    """
+    获取可用于训练的权重列表
+
+    根据模型架构ID和任务类型筛选可用的预训练权重
+    """
+    try:
+        weights = weight_service.get_weights_for_training(
+            db=db,
+            architecture_id=architecture_id,
+            task_type=task_type
+        )
+
+        items = []
+        for weight in weights:
+            # 获取架构名称
+            arch_name = None
+            if weight.architecture:
+                arch_name = weight.architecture.name
+
+            items.append(WeightForTraining(
+                id=weight.id,
+                name=weight.name,
+                display_name=weight.display_name,
+                description=weight.description,
+                task_type=weight.task_type,
+                version=weight.version,
+                file_path=weight.file_path,
+                architecture_id=weight.architecture_id,
+                architecture_name=arch_name,
+                created_at=weight.created_at
+            ))
+
+        return items
+
+    except Exception as e:
+        logger.error(f"获取可用于训练的权重失败: {e}")
+        raise HTTPException(500, f"获取可用于训练的权重失败: {str(e)}")
+
+
+@router.get("/by-task/{task_type}", response_model=WeightLibraryList)
+async def list_weights_by_task(
+    task_type: str,
+    skip: int = Query(0, ge=0, description="跳过数量"),
+    limit: int = Query(100, ge=1, le=100, description="返回数量"),
+    db: Session = Depends(get_db)
+):
+    """
+    按任务类型获取权重列表
+
+    快捷获取指定任务类型的所有权重。
+    """
+    try:
+        # 验证任务类型
+        valid_types = ['classification', 'detection']
+        if task_type not in valid_types:
+            raise HTTPException(400, f"无效的任务类型，应为: {', '.join(valid_types)}")
+
+        weights = weight_service.get_weights(
+            db=db,
+            task_type=task_type,
+            is_active=True,
+            skip=skip,
+            limit=limit
+        )
+
+        items = []
+        for weight in weights:
+            items.append(WeightLibraryListItem(
+                id=weight.id,
+                name=weight.name,
+                display_name=weight.display_name,
+                description=weight.description,
+                task_type=weight.task_type,
+                version=weight.version,
+                file_name=weight.file_name,
+                file_size_mb=round(weight.file_size / 1024 / 1024, 2) if weight.file_size else None,
+                framework=weight.framework,
+                is_auto_detected=weight.is_auto_detected,
+                created_at=weight.created_at
+            ))
+
+        return WeightLibraryList(
+            weights=items,
+            total=len(items)
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"按任务类型获取权重失败: {e}")
+        raise HTTPException(500, f"按任务类型获取权重失败: {str(e)}")
+
+
+# ==============================
+# 带参数的权重路由（必须放在最后）
+# ==============================
+
 @router.get("/{weight_id}", response_model=WeightLibraryResponse)
 async def get_weight(
     weight_id: int,
@@ -317,55 +505,44 @@ async def get_weight_versions(
         raise HTTPException(500, f"获取权重版本历史失败: {str(e)}")
 
 
-@router.get("/by-task/{task_type}", response_model=WeightLibraryList)
-async def list_weights_by_task(
-    task_type: str,
-    skip: int = Query(0, ge=0, description="跳过数量"),
-    limit: int = Query(100, ge=1, le=100, description="返回数量"),
+@router.get("/{weight_id}/tree", response_model=WeightTreeResponse)
+async def get_weight_subtree(
+    weight_id: int,
     db: Session = Depends(get_db)
 ):
     """
-    按任务类型获取权重列表
+    获取指定权重的子树
 
-    快捷获取指定任务类型的所有权重。
+    返回指定权重作为根节点的完整子树
     """
     try:
-        # 验证任务类型
-        valid_types = ['classification', 'detection']
-        if task_type not in valid_types:
-            raise HTTPException(400, f"无效的任务类型，应为: {', '.join(valid_types)}")
+        subtree = weight_service.get_weight_subtree(db, weight_id)
+        if not subtree:
+            raise HTTPException(404, "权重不存在")
 
-        weights = weight_service.get_weights(
-            db=db,
-            task_type=task_type,
-            is_active=True,
-            skip=skip,
-            limit=limit
-        )
-
-        items = []
-        for weight in weights:
-            items.append(WeightLibraryListItem(
-                id=weight.id,
-                name=weight.name,
-                display_name=weight.display_name,
-                description=weight.description,
-                task_type=weight.task_type,
-                version=weight.version,
-                file_name=weight.file_name,
-                file_size_mb=round(weight.file_size / 1024 / 1024, 2) if weight.file_size else None,
-                framework=weight.framework,
-                is_auto_detected=weight.is_auto_detected,
-                created_at=weight.created_at
-            ))
-
-        return WeightLibraryList(
-            weights=items,
-            total=len(items)
-        )
+        return subtree
 
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"按任务类型获取权重失败: {e}")
-        raise HTTPException(500, f"按任务类型获取权重失败: {str(e)}")
+        logger.error(f"获取权重子树失败: {e}")
+        raise HTTPException(500, f"获取权重子树失败: {str(e)}")
+
+
+@router.get("/{weight_id}/config", response_model=WeightTrainingConfigResponse)
+async def get_weight_training_config(
+    weight_id: int,
+    db: Session = Depends(get_db)
+):
+    """
+    获取权重的训练配置信息
+
+    返回权重关联的训练配置（如果有）
+    """
+    try:
+        config = weight_service.get_weight_training_config(db, weight_id)
+        return config
+
+    except Exception as e:
+        logger.error(f"获取权重训练配置失败: {e}")
+        raise HTTPException(500, f"获取权重训练配置失败: {str(e)}")

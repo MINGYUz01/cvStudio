@@ -32,7 +32,8 @@ import {
   Trash2,
   HardDrive,
   AlertCircle,
-  Loader2
+  Loader2,
+  GitBranch
 } from 'lucide-react';
 import {
   LineChart,
@@ -56,7 +57,7 @@ import {
 } from '../src/services/training';
 import { datasetService, Dataset } from '../src/services/datasets';
 import { getAugmentationStrategies } from '../src/services/augmentation';
-import { weightService, WeightLibraryItem } from '../src/services/weights';
+import { weightService, WeightLibraryItem, WeightForTrainingOption } from '../src/services/weights';
 import { getPresetModels, type PresetModel } from '../src/services/models';
 import { AugmentationStrategy } from '../types';
 
@@ -430,6 +431,8 @@ const TrainingMonitor: React.FC = () => {
   const [formAugmentationId, setFormAugmentationId] = useState<number | null>(null);
   const [formModelFileId, setFormModelFileId] = useState<number | null>(null);
   const [formWeightId, setFormWeightId] = useState<number | null>(null);
+  const [formPretrainedWeightId, setFormPretrainedWeightId] = useState<number | null>(null);
+  const [availablePretrainedWeights, setAvailablePretrainedWeights] = useState<WeightForTrainingOption[]>([]);
   const [allowOverwrite, setAllowOverwrite] = useState(false);
   const [showOverwriteWarning, setShowOverwriteWarning] = useState(false);
 
@@ -582,6 +585,27 @@ const TrainingMonitor: React.FC = () => {
       console.error('获取权重失败:', err);
     }
   }, []);
+
+  // 加载可用于训练的预训练权重
+  const fetchPretrainedWeights = useCallback(async (modelId: number, taskType: TaskType) => {
+    try {
+      const data = await weightService.getWeightsForTraining(modelId, taskType);
+      setAvailablePretrainedWeights(data);
+    } catch (err) {
+      console.error('获取预训练权重失败:', err);
+      setAvailablePretrainedWeights([]);
+    }
+  }, []);
+
+  // 当模型或任务变化时，加载可用的预训练权重
+  useEffect(() => {
+    if (formModelFileId && formTask) {
+      fetchPretrainedWeights(formModelFileId, formTask);
+    } else {
+      setAvailablePretrainedWeights([]);
+      setFormPretrainedWeightId(null);
+    }
+  }, [formModelFileId, formTask, fetchPretrainedWeights]);
 
   // 初始化加载数据
   useEffect(() => {
@@ -931,7 +955,8 @@ const TrainingMonitor: React.FC = () => {
         model_id: formModelFileId,
         dataset_id: formDatasetId,
         config: trainingConfig,
-        user_id: 1 // TODO: 从认证中获取用户ID
+        user_id: 1, // TODO: 从认证中获取用户ID
+        pretrained_weight_id: formPretrainedWeightId || undefined
       });
 
       console.log('[DEBUG] 训练任务创建成功，ID:', createdRun.id);
@@ -956,6 +981,7 @@ const TrainingMonitor: React.FC = () => {
       setFormModelFileId(null);
       setFormDatasetId(null);
       setFormAugmentationId(null);
+      setFormPretrainedWeightId(null);
 
       // 切换到列表视图
       setView('list');
@@ -1427,6 +1453,33 @@ const TrainingMonitor: React.FC = () => {
                                         <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none" />
                                     </div>
                                 </div>
+
+                                {/* 预训练权重选择器 */}
+                                {availablePretrainedWeights.length > 0 && (
+                                    <div className="group">
+                                        <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1 group-hover:text-slate-400 transition-colors">预训练权重 (可选)</label>
+                                        <div className="relative">
+                                            <GitBranch size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
+                                            <select
+                                                style={{ colorScheme: 'dark' }}
+                                                value={formPretrainedWeightId || ''}
+                                                onChange={e => setFormPretrainedWeightId(e.target.value ? Number(e.target.value) : null)}
+                                                className="w-full bg-slate-950 border border-slate-700 rounded pl-9 pr-3 py-2 text-white text-sm outline-none focus:border-cyan-500 transition-colors appearance-none cursor-pointer"
+                                            >
+                                                <option value="">不使用预训练权重</option>
+                                                {availablePretrainedWeights.map((weight) => (
+                                                    <option key={weight.id} value={weight.id}>
+                                                        {weight.display_name} (v{weight.version})
+                                                    </option>
+                                                ))}
+                                            </select>
+                                            <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none" />
+                                        </div>
+                                        <p className="text-[9px] text-slate-500 mt-1">
+                                            预训练权重将复制到实验目录作为训练起点
+                                        </p>
+                                    </div>
+                                )}
 
                                 <div className="group">
                                     <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1 group-hover:text-slate-400 transition-colors">数据集</label>

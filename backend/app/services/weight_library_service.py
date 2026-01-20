@@ -565,3 +565,244 @@ class WeightLibraryService:
         except Exception as e:
             self.logger.error(f"自动检测任务类型失败: {e}")
             return 'unknown'
+
+    # ==================== 权重树形结构相关方法 ====================
+
+    def get_root_weights(
+        self,
+        db: Session,
+        task_type: Optional[str] = None,
+        skip: int = 0,
+        limit: int = 100
+    ) -> List[WeightLibrary]:
+        """
+        获取根节点权重列表
+
+        Args:
+            db: 数据库会话
+            task_type: 过滤任务类型
+            skip: 跳过记录数
+            limit: 返回记录数
+
+        Returns:
+            根节点权重列表（is_root=True）
+        """
+        try:
+            query = db.query(WeightLibrary).filter(WeightLibrary.is_root == True)
+
+            if task_type:
+                query = query.filter(WeightLibrary.task_type == task_type)
+
+            weights = query.order_by(
+                WeightLibrary.created_at.desc()
+            ).offset(skip).limit(limit).all()
+
+            self.logger.debug(f"获取根节点权重列表: {len(weights)} 条记录")
+            return weights
+
+        except Exception as e:
+            self.logger.error(f"获取根节点权重列表失败: {e}")
+            return []
+
+    def build_weight_tree(self, db: Session) -> List[Dict[str, Any]]:
+        """
+        构建完整的权重树形结构
+
+        Args:
+            db: 数据库会话
+
+        Returns:
+            权重树列表（每个根节点包含其所有子节点）
+        """
+        try:
+            # 获取所有根节点
+            roots = db.query(WeightLibrary).filter(
+                WeightLibrary.is_root == True
+            ).order_by(WeightLibrary.created_at.desc()).all()
+
+            trees = []
+            for root in roots:
+                trees.append(self._build_subtree(db, root))
+
+            return trees
+
+        except Exception as e:
+            self.logger.error(f"构建权重树失败: {e}")
+            return []
+
+    def _build_subtree(self, db: Session, weight: WeightLibrary) -> Dict[str, Any]:
+        """
+        递归构建子树
+
+        Args:
+            db: 数据库会话
+            weight: 当前权重节点
+
+        Returns:
+            包含子节点的字典
+        """
+        # 获取 display_name，处理可能的 AttributeError
+        display_name = f"{weight.name} v{weight.version}"
+        try:
+            display_name = weight.display_name
+        except (AttributeError, TypeError):
+            pass
+
+        node = {
+            "id": weight.id,
+            "name": weight.name,
+            "display_name": display_name,
+            "description": weight.description,
+            "task_type": weight.task_type,
+            "version": weight.version,
+            "file_name": weight.file_name,
+            "file_size_mb": round(weight.file_size / 1024 / 1024, 2) if weight.file_size else None,
+            "framework": weight.framework,
+            "is_auto_detected": weight.is_auto_detected,
+            "is_root": weight.is_root,
+            "source_type": weight.source_type,
+            "source_training_id": weight.source_training_id,
+            "architecture_id": weight.architecture_id,
+            "parent_version_id": weight.parent_version_id,
+            "created_at": weight.created_at,
+            "children": []
+        }
+
+        # 获取子节点
+        children = db.query(WeightLibrary).filter(
+            WeightLibrary.parent_version_id == weight.id
+        ).all()
+
+        for child in children:
+            node["children"].append(self._build_subtree(db, child))
+
+        return node
+
+    def get_weight_subtree(
+        self,
+        db: Session,
+        weight_id: int
+    ) -> Optional[Dict[str, Any]]:
+        """
+        获取指定权重的子树
+
+        Args:
+            db: 数据库会话
+            weight_id: 权重ID
+
+        Returns:
+            子树字典，如果权重不存在返回None
+        """
+        try:
+            weight = db.query(WeightLibrary).filter(
+                WeightLibrary.id == weight_id
+            ).first()
+
+            if not weight:
+                return None
+
+            return self._build_subtree(db, weight)
+
+        except Exception as e:
+            self.logger.error(f"获取权重子树失败: {e}")
+            return None
+
+    def get_weights_for_training(
+        self,
+        db: Session,
+        architecture_id: Optional[int] = None,
+        task_type: Optional[str] = None
+    ) -> List[WeightLibrary]:
+        """
+        获取可用于训练的权重列表
+
+        Args:
+            db: 数据库会话
+            architecture_id: 模型架构ID筛选
+            task_type: 任务类型筛选
+
+        Returns:
+            可用于训练的权重列表
+        """
+        try:
+            query = db.query(WeightLibrary).filter(
+                WeightLibrary.is_active == "active"
+            )
+
+            if architecture_id:
+                query = query.filter(WeightLibrary.architecture_id == architecture_id)
+
+            if task_type:
+                query = query.filter(WeightLibrary.task_type == task_type)
+
+            weights = query.order_by(
+                WeightLibrary.created_at.desc()
+            ).all()
+
+            self.logger.debug(f"获取可用于训练的权重: {len(weights)} 条记录")
+            return weights
+
+        except Exception as e:
+            self.logger.error(f"获取可用于训练的权重失败: {e}")
+            return []
+
+    def get_weight_training_config(
+        self,
+        db: Session,
+        weight_id: int
+    ) -> Dict[str, Any]:
+        """
+        获取权重的训练配置信息
+
+        Args:
+            db: 数据库会话
+            weight_id: 权重ID
+
+        Returns:
+            包含权重信息和训练配置的字典
+        """
+        try:
+            weight = db.query(WeightLibrary).filter(
+                WeightLibrary.id == weight_id
+            ).first()
+
+            if not weight:
+                return {
+                    "weight_id": weight_id,
+                    "weight_name": "",
+                    "training_config": None,
+                    "source_training": None
+                }
+
+            result = {
+                "weight_id": weight_id,
+                "weight_name": weight.display_name,
+                "training_config": None,
+                "source_training": None
+            }
+
+            # 如果权重来自训练，获取训练配置
+            if weight.source_training_id:
+                from app.models.training import TrainingRun
+                training = db.query(TrainingRun).filter(
+                    TrainingRun.id == weight.source_training_id
+                ).first()
+
+                if training:
+                    result["training_config"] = training.hyperparams
+                    result["source_training"] = {
+                        "id": training.id,
+                        "name": training.name,
+                        "hyperparams": training.hyperparams
+                    }
+
+            return result
+
+        except Exception as e:
+            self.logger.error(f"获取权重训练配置失败: {e}")
+            return {
+                "weight_id": weight_id,
+                "weight_name": "",
+                "training_config": None,
+                "source_training": None
+            }

@@ -46,7 +46,8 @@ class TrainingService:
         model_id: int,
         dataset_id: int,
         config: Dict[str, Any],
-        user_id: int
+        user_id: int,
+        pretrained_weight_id: Optional[int] = None
     ) -> TrainingRun:
         """
         创建训练任务
@@ -59,6 +60,7 @@ class TrainingService:
             dataset_id: 数据集ID
             config: 训练配置
             user_id: 创建用户ID
+            pretrained_weight_id: 预训练权重ID
 
         Returns:
             创建的训练任务对象
@@ -79,7 +81,8 @@ class TrainingService:
                 total_epochs=config.get("epochs", 100),
                 current_epoch=0,
                 progress=0.0,
-                created_by=user_id
+                created_by=user_id,
+                pretrained_weight_id=pretrained_weight_id
             )
 
             db.add(training_run)
@@ -90,6 +93,13 @@ class TrainingService:
             experiment_manager = ExperimentManager(training_run.id)
             experiment_manager.create_experiment_dir()
             experiment_dir_path = str(experiment_manager.experiment_dir)
+
+            # 如果有预训练权重，复制到实验目录
+            if pretrained_weight_id:
+                self._copy_pretrained_weight(
+                    db, pretrained_weight_id, experiment_dir_path
+                )
+                config["pretrained_weight_id"] = pretrained_weight_id
 
             # 更新数据库记录中的实验目录路径
             training_run.experiment_dir = experiment_dir_path
@@ -701,7 +711,11 @@ class TrainingService:
                 file_size=best_target_path.stat().st_size,
                 framework="pytorch",
                 input_size=input_size,
-                uploaded_by=training_run.created_by
+                uploaded_by=training_run.created_by,
+                source_type="trained",
+                source_training_id=training_run_id,
+                is_root=True,
+                architecture_id=training_run.model_id
             )
             db.add(best_weight)
             db.flush()  # 获取ID但不提交
@@ -732,7 +746,11 @@ class TrainingService:
                     file_size=last_target_path.stat().st_size,
                     framework="pytorch",
                     input_size=input_size,
-                    uploaded_by=training_run.created_by
+                    uploaded_by=training_run.created_by,
+                    source_type="trained",
+                    source_training_id=training_run_id,
+                    is_root=False,
+                    architecture_id=training_run.model_id
                 )
                 db.add(last_weight_record)
 
@@ -820,3 +838,56 @@ class TrainingService:
         except Exception as e:
             self.logger.error(f"获取训练日志失败: {e}")
             return []
+
+    def _copy_pretrained_weight(
+        self,
+        db: Session,
+        weight_id: int,
+        experiment_dir: str
+    ) -> str:
+        """
+        复制预训练权重到实验目录
+
+        Args:
+            db: 数据库会话
+            weight_id: 预训练权重ID
+            experiment_dir: 实验目录路径
+
+        Returns:
+            复制后的权重文件路径
+
+        Raises:
+            ValueError: 当权重不存在时
+        """
+        try:
+            from app.models.weight_library import WeightLibrary
+            import shutil
+
+            # 获取权重记录
+            weight = db.query(WeightLibrary).filter(
+                WeightLibrary.id == weight_id
+            ).first()
+
+            if not weight:
+                raise ValueError(f"预训练权重不存在: {weight_id}")
+
+            # 源文件路径
+            source_path = Path(weight.file_path)
+            if not source_path.exists():
+                raise ValueError(f"预训练权重文件不存在: {source_path}")
+
+            # 目标路径
+            target_path = Path(experiment_dir) / f"pretrained_{source_path.name}"
+
+            # 复制文件
+            shutil.copy2(source_path, target_path)
+
+            self.logger.info(
+                f"预训练权重已复制: {source_path} -> {target_path}"
+            )
+
+            return str(target_path)
+
+        except Exception as e:
+            self.logger.error(f"复制预训练权重失败: {e}")
+            raise ValueError(f"复制预训练权重失败: {e}")
