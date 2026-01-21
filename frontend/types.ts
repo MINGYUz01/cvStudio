@@ -102,6 +102,23 @@ export interface WeightTrainingConfig {
   } | null;
 }
 
+// 配置差异项
+export interface ConfigDiffItem {
+  key: string;
+  label: string;
+  parentValue: any;
+  currentValue: any;
+  isChanged: boolean;
+  category: 'hyperparams' | 'dataset' | 'architecture';
+}
+
+// 权重路径节点
+export interface WeightPathNode {
+  weight: WeightTreeItem;
+  config: WeightTrainingConfig | null;
+  relationshipType?: 'training' | 'same_task';
+}
+
 export interface WeightForTrainingOption {
   id: number;
   name: string;
