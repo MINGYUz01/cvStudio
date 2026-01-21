@@ -5,14 +5,15 @@ import {
   CheckCircle, AlertTriangle, Code, Info, X, Copy,
   Layout, Package, Box, AlertOctagon, HelpCircle,
   Database, HardDrive, Download, Upload, Tag,
-  Loader2, FileText, FolderOpen, ChevronLeft, ChevronRight, ChevronDown
+  Loader2, FileText, FolderOpen, ChevronLeft, ChevronRight, ChevronDown, Settings
 } from 'lucide-react';
 import { ModelNode, WeightCheckpoint, WeightTreeItem } from '../types';
 import modelsAPI from '../src/services/models';
-import { weightService, TaskType } from '../src/services/weights';
+import { weightService, TaskType, WeightTrainingConfig } from '../src/services/weights';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from 'recharts';
 import CodePreviewModal from './CodePreviewModal';
 import InputModal from './InputModal';
+import TrainingConfigView from './TrainingConfigView';
 
 // 统计图表颜色
 const CHART_COLORS = ['#22d3ee', '#a855f7', '#f43f5e', '#fbbf24', '#34d399', '#60a5fa'];
@@ -259,6 +260,12 @@ const ModelBuilder: React.FC = () => {
   const [rootWeights, setRootWeights] = useState<WeightCheckpoint[]>([]);
   const [weightTree, setWeightTree] = useState<WeightTreeItem[]>([]);
 
+  // Weight Config View State
+  const [showWeightConfigModal, setShowWeightConfigModal] = useState(false);
+  const [selectedWeightForConfig, setSelectedWeightForConfig] = useState<WeightTreeItem | null>(null);
+  const [weightConfig, setWeightConfig] = useState<WeightTrainingConfig | null>(null);
+  const [configLoading, setConfigLoading] = useState(false);
+
   // Generated Model Files State
   const [generatedFiles, setGeneratedFiles] = useState<Array<{id: number, filename: string, name: string, size: number, created: string}>>([]);
 
@@ -272,7 +279,8 @@ const ModelBuilder: React.FC = () => {
     expandedNodes: Set<number>;
     onToggleExpand: (id: number) => void;
     onDelete?: (node: WeightTreeItem) => void;
-  }> = ({ node, level, expandedNodes, onToggleExpand, onDelete }) => {
+    onViewConfig?: (node: WeightTreeItem) => void;
+  }> = ({ node, level, expandedNodes, onToggleExpand, onDelete, onViewConfig }) => {
     const hasChildren = node.children && node.children.length > 0;
     const isExpanded = expandedNodes.has(node.id);
 
@@ -317,6 +325,20 @@ const ModelBuilder: React.FC = () => {
             <span className="text-xs text-cyan-400 font-mono ml-2 flex-shrink-0">
               v{node.version}
             </span>
+
+            {/* 查看配置按钮 - 仅训练生成的权重显示 */}
+            {node.source_type === 'trained' && onViewConfig && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onViewConfig(node);
+                }}
+                className="p-0.5 text-slate-500 hover:text-purple-400 hover:bg-purple-900/20 rounded transition-colors ml-1"
+                title="查看训练配置"
+              >
+                <Settings size={12} />
+              </button>
+            )}
 
             {/* 删除按钮 */}
             {onDelete && (
@@ -364,6 +386,7 @@ const ModelBuilder: React.FC = () => {
                 expandedNodes={expandedNodes}
                 onToggleExpand={onToggleExpand}
                 onDelete={onDelete}
+                onViewConfig={onViewConfig}
               />
             ))}
           </div>
@@ -378,7 +401,8 @@ const ModelBuilder: React.FC = () => {
   const WeightTreeCard: React.FC<{
     tree: WeightTreeItem;
     onDelete?: (node: WeightTreeItem) => void;
-  }> = ({ tree, onDelete }) => {
+    onViewConfig?: (node: WeightTreeItem) => void;
+  }> = ({ tree, onDelete, onViewConfig }) => {
     const [isExpanded, setIsExpanded] = useState(false);
     const [expandedNodes, setExpandedNodes] = useState<Set<number>>(new Set());
 
@@ -444,6 +468,20 @@ const ModelBuilder: React.FC = () => {
                 </span>
               )}
 
+              {/* 查看配置按钮 - 仅训练生成的权重显示 */}
+              {tree.source_type === 'trained' && onViewConfig && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onViewConfig(tree);
+                  }}
+                  className="p-1 text-slate-500 hover:text-purple-400 hover:bg-purple-900/20 rounded transition-colors"
+                  title="查看训练配置"
+                >
+                  <Settings size={14} />
+                </button>
+              )}
+
               {/* 删除按钮 */}
               {onDelete && (
                 <button
@@ -491,6 +529,7 @@ const ModelBuilder: React.FC = () => {
                 expandedNodes={expandedNodes}
                 onToggleExpand={handleToggleExpand}
                 onDelete={onDelete}
+                onViewConfig={onViewConfig}
               />
             ))}
           </div>
@@ -655,6 +694,30 @@ const ModelBuilder: React.FC = () => {
   const closePresetModal = () => {
     setShowPresetModal(false);
     setSelectedPreset(null);
+  };
+
+  // 查看权重训练配置
+  const handleViewWeightConfig = async (weight: WeightTreeItem) => {
+    setSelectedWeightForConfig(weight);
+    setShowWeightConfigModal(true);
+    setConfigLoading(true);
+
+    try {
+      const config = await weightService.getWeightTrainingConfig(weight.id);
+      setWeightConfig(config);
+    } catch (error) {
+      console.error('获取训练配置失败:', error);
+      showNotification('获取训练配置失败', 'error');
+      setWeightConfig(null);
+    } finally {
+      setConfigLoading(false);
+    }
+  };
+
+  const handleCloseWeightConfigModal = () => {
+    setShowWeightConfigModal(false);
+    setSelectedWeightForConfig(null);
+    setWeightConfig(null);
   };
 
   // 获取难度标签样式
@@ -2561,6 +2624,7 @@ const ModelBuilder: React.FC = () => {
                                         <WeightTreeCard
                                             key={tree.id}
                                             tree={tree}
+                                            onViewConfig={handleViewWeightConfig}
                                             onDelete={(node) => {
                                                 const hasChildren = node.children && node.children.length > 0;
                                                 setDialog({
@@ -2583,6 +2647,7 @@ const ModelBuilder: React.FC = () => {
                                         <WeightTreeCard
                                             key={tree.id}
                                             tree={tree}
+                                            onViewConfig={handleViewWeightConfig}
                                             onDelete={(node) => {
                                                 const hasChildren = node.children && node.children.length > 0;
                                                 setDialog({
@@ -2744,6 +2809,15 @@ const ModelBuilder: React.FC = () => {
             loadWeightTree();
           }}
           showNotification={showNotification}
+        />
+
+        {/* Training Config View Modal */}
+        <TrainingConfigView
+          isOpen={showWeightConfigModal}
+          onClose={handleCloseWeightConfigModal}
+          weight={selectedWeightForConfig}
+          config={weightConfig}
+          loading={configLoading}
         />
     </div>
   );

@@ -745,21 +745,41 @@ class TrainingService:
                 pretrained = db.query(WeightModel).filter(WeightModel.id == pretrained_weight_id).first()
                 if pretrained:
                     parent_weight_id = pretrained_weight_id
-                    # 如果父权重是训练得到的，它应该已经是根节点
+                    actual_parent = pretrained
+
+                    # 如果预训练权重是 last 模型（有 parent_version_id 且来自同一训练），
+                    # 应该使用同一次训练的 best 模型作为父节点
+                    if (pretrained.parent_version_id and
+                        pretrained.source_training_id and
+                        pretrained.source_type == 'trained'):
+                        # 检查父节点是否是同一次训练的 best 模型
+                        parent_node = db.query(WeightModel).filter(
+                            WeightModel.id == pretrained.parent_version_id
+                        ).first()
+                        if (parent_node and
+                            parent_node.source_training_id == pretrained.source_training_id):
+                            # 使用 best 模型作为父节点
+                            parent_weight_id = parent_node.id
+                            actual_parent = parent_node
+                            self.logger.info(
+                                f"检测到预训练权重是 last 模型，使用同训练的 best 模型作为父节点: "
+                                f"{actual_parent.name} v{actual_parent.version}"
+                            )
+
                     # 版本号在父权重版本基础上递增
                     try:
-                        parent_version_parts = pretrained.version.split(".")
+                        parent_version_parts = actual_parent.version.split(".")
                         if len(parent_version_parts) >= 2:
                             major = int(parent_version_parts[0])
-                            minor = int(parent_version_parts[1])
-                            # 新的best版本作为父版本的下一个小版本
-                            base_version = f"{major}.{minor + 1}.0"
+                            # minor 位 +1 作为新的 best 版本号
+                            minor = int(parent_version_parts[1]) + 1
+                            base_version = f"{major}.{minor}"
                         else:
-                            base_version = "1.0"
+                            base_version = "1.1"
                     except:
-                        base_version = "1.0"
+                        base_version = "1.1"
 
-                    self.logger.info(f"使用预训练权重 {pretrained.name} v{pretrained.version}，新版本将作为子节点")
+                    self.logger.info(f"使用预训练权重 {actual_parent.name} v{actual_parent.version}，新版本将作为子节点")
 
             # 1. 保存best模型
             best_file_path = Path(best_cp["path"])

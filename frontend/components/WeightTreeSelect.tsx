@@ -5,7 +5,7 @@
  */
 
 import React, { useState, useRef, useEffect } from 'react';
-import { ChevronRight, ChevronDown, Check, GitBranch, X } from 'lucide-react';
+import { ChevronRight, ChevronDown, Check, GitBranch, X, Settings } from 'lucide-react';
 
 export interface WeightTreeSelectOption {
   id: number;
@@ -24,6 +24,8 @@ interface WeightTreeSelectProps {
   placeholder?: string;
   disabled?: boolean;
   className?: string;
+  /** 查看配置回调，仅对训练生成的权重有效 */
+  onViewConfig?: (weight: WeightTreeSelectOption) => void;
 }
 
 interface TreeNodeProps {
@@ -33,6 +35,7 @@ interface TreeNodeProps {
   onSelect: (id: number) => void;
   expandedIds: Set<number>;
   onToggleExpand: (id: number) => void;
+  onViewConfig?: (weight: WeightTreeSelectOption) => void;
 }
 
 const TreeNode: React.FC<TreeNodeProps> = ({
@@ -41,7 +44,8 @@ const TreeNode: React.FC<TreeNodeProps> = ({
   selectedId,
   onSelect,
   expandedIds,
-  onToggleExpand
+  onToggleExpand,
+  onViewConfig
 }) => {
   const hasChildren = node.children && node.children.length > 0;
   const isExpanded = expandedIds.has(node.id);
@@ -54,6 +58,13 @@ const TreeNode: React.FC<TreeNodeProps> = ({
   const handleExpandClick = (e: React.MouseEvent) => {
     e.stopPropagation();
     onToggleExpand(node.id);
+  };
+
+  const handleViewConfigClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (onViewConfig) {
+      onViewConfig(node);
+    }
   };
 
   return (
@@ -94,10 +105,21 @@ const TreeNode: React.FC<TreeNodeProps> = ({
         </span>
 
         {/* 权重名称 */}
-        <span className="flex-1 text-sm truncate">{node.display_name}</span>
+        <span className="text-sm truncate">{node.display_name}</span>
 
         {/* 版本标签 */}
         <span className="ml-2 text-xs text-slate-500">v{node.version}</span>
+
+        {/* 配置查看按钮 - 仅训练生成的权重显示 */}
+        {node.source_type === 'trained' && onViewConfig && (
+          <button
+            className="ml-2 p-1 hover:bg-slate-700 rounded transition-colors text-slate-500 hover:text-cyan-400"
+            onClick={handleViewConfigClick}
+            title="查看训练配置"
+          >
+            <Settings size={12} />
+          </button>
+        )}
       </div>
 
       {/* 子节点 */}
@@ -112,6 +134,7 @@ const TreeNode: React.FC<TreeNodeProps> = ({
               onSelect={onSelect}
               expandedIds={expandedIds}
               onToggleExpand={onToggleExpand}
+              onViewConfig={onViewConfig}
             />
           ))}
         </div>
@@ -126,7 +149,8 @@ const WeightTreeSelect: React.FC<WeightTreeSelectProps> = ({
   onChange,
   placeholder = '请选择预训练权重',
   disabled = false,
-  className = ''
+  className = '',
+  onViewConfig
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
@@ -171,6 +195,13 @@ const WeightTreeSelect: React.FC<WeightTreeSelectProps> = ({
     onChange(null);
   };
 
+  const handleViewConfig = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (selectedOption && onViewConfig) {
+      onViewConfig(selectedOption);
+    }
+  };
+
   return (
     <div ref={dropdownRef} className={`relative ${className}`}>
       {/* 触发按钮 */}
@@ -186,17 +217,28 @@ const WeightTreeSelect: React.FC<WeightTreeSelectProps> = ({
       >
         <div className="flex items-center flex-1 min-w-0">
           {selectedOption ? (
-            <div className="flex items-center min-w-0">
+            <div className="flex items-center min-w-0 gap-2">
               <GitBranch
                 size={14}
-                className={`mr-2 flex-shrink-0 ${
+                className={`flex-shrink-0 ${
                   selectedOption.source_type === 'trained' ? 'text-purple-400' : 'text-emerald-400'
                 }`}
               />
               <span className="text-sm truncate">{selectedOption.display_name}</span>
-              <span className="ml-2 text-xs text-slate-500 flex-shrink-0">
+              <span className="text-xs text-slate-500 flex-shrink-0">
                 v{selectedOption.version}
               </span>
+              {/* 训练配置查看按钮 - 在权重名称旁边显示 */}
+              {selectedOption.source_type === 'trained' && onViewConfig && (
+                <button
+                  className="flex items-center gap-1 px-2 py-0.5 bg-purple-900/30 hover:bg-purple-900/50 border border-purple-700/50 rounded transition-colors text-purple-300 hover:text-purple-200 text-xs flex-shrink-0"
+                  onClick={handleViewConfig}
+                  title="查看训练配置"
+                >
+                  <Settings size={11} />
+                  <span>配置</span>
+                </button>
+              )}
             </div>
           ) : (
             <span className="text-sm text-slate-500">{placeholder}</span>
@@ -252,6 +294,7 @@ const WeightTreeSelect: React.FC<WeightTreeSelectProps> = ({
                   onSelect={handleSelect}
                   expandedIds={expandedIds}
                   onToggleExpand={handleToggleExpand}
+                  onViewConfig={onViewConfig}
                 />
               ))}
             </div>

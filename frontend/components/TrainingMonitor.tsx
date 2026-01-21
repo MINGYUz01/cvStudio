@@ -57,8 +57,9 @@ import {
 } from '../src/services/training';
 import { datasetService, Dataset } from '../src/services/datasets';
 import { getAugmentationStrategies } from '../src/services/augmentation';
-import { weightService, WeightLibraryItem, WeightForTrainingOption, WeightTreeItem } from '../src/services/weights';
+import { weightService, WeightLibraryItem, WeightForTrainingOption, WeightTreeItem, WeightTrainingConfig } from '../src/services/weights';
 import WeightTreeSelect, { WeightTreeSelectOption } from './WeightTreeSelect';
+import TrainingConfigView from './TrainingConfigView';
 import { getPresetModels, type PresetModel } from '../src/services/models';
 import { AugmentationStrategy } from '../types';
 
@@ -458,6 +459,12 @@ const TrainingMonitor: React.FC = () => {
     isOpen: boolean;
     exp: Experiment | null;
   }>({ isOpen: false, exp: null });
+
+  // Training Config View State
+  const [showWeightConfigModal, setShowWeightConfigModal] = useState(false);
+  const [selectedWeightForConfig, setSelectedWeightForConfig] = useState<WeightTreeSelectOption | null>(null);
+  const [weightConfig, setWeightConfig] = useState<WeightTrainingConfig | null>(null);
+  const [configLoading, setConfigLoading] = useState(false);
 
   const [notification, setNotification] = useState<{msg: string, type: 'error' | 'success' | 'info'} | null>(null);
 
@@ -1122,6 +1129,30 @@ const TrainingMonitor: React.FC = () => {
       }
   };
 
+  // 查看权重训练配置
+  const handleViewWeightConfig = async (weight: WeightTreeSelectOption) => {
+      setSelectedWeightForConfig(weight);
+      setShowWeightConfigModal(true);
+      setConfigLoading(true);
+
+      try {
+          const config = await weightService.getWeightTrainingConfig(weight.id);
+          setWeightConfig(config);
+      } catch (error) {
+          console.error('获取训练配置失败:', error);
+          showNotification('获取训练配置失败', 'error');
+          setWeightConfig(null);
+      } finally {
+          setConfigLoading(false);
+      }
+  };
+
+  const handleCloseWeightConfigModal = () => {
+      setShowWeightConfigModal(false);
+      setSelectedWeightForConfig(null);
+      setWeightConfig(null);
+  };
+
   // --- Dynamic Field Renderer ---
   const renderField = (key: string, fieldDef: any) => {
       // 1. Check Visibility
@@ -1474,6 +1505,7 @@ const TrainingMonitor: React.FC = () => {
                                             options={availablePretrainedWeights}
                                             value={formPretrainedWeightId}
                                             onChange={setFormPretrainedWeightId}
+                                            onViewConfig={handleViewWeightConfig}
                                             placeholder="选择预训练权重..."
                                             className="w-full"
                                         />
@@ -2011,6 +2043,15 @@ const TrainingMonitor: React.FC = () => {
         title="删除训练任务"
         msg={`确定要删除训练任务「${deleteModal.name}」吗？此操作不可恢复，相关的日志和checkpoint也将被删除。`}
         type="danger"
+      />
+
+      {/* TRAINING CONFIG VIEW MODAL */}
+      <TrainingConfigView
+        isOpen={showWeightConfigModal}
+        onClose={handleCloseWeightConfigModal}
+        weight={selectedWeightForConfig}
+        config={weightConfig}
+        loading={configLoading}
       />
 
       {view === 'list' && renderList()}
