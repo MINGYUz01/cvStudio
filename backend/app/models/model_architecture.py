@@ -17,7 +17,6 @@ class ModelArchitecture(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(100), nullable=False, index=True)
     description = Column(Text, nullable=True)
-    version = Column(String(20), default="v1.0")
     type = Column(String(50), default="Custom")  # 模型类型：ResNet, YOLO, Custom等
     file_path = Column(String(500), nullable=False)  # JSON配置文件存储路径
     file_name = Column(String(100), nullable=False)  # 原始文件名（用于兼容）
@@ -34,7 +33,7 @@ class ModelArchitecture(Base):
     weights = relationship("WeightLibrary", back_populates="architecture")
 
     def __repr__(self):
-        return f"<ModelArchitecture(id={self.id}, name='{self.name}', version='{self.version}')>"
+        return f"<ModelArchitecture(id={self.id}, name='{self.name}')>"
 
     def to_dict(self):
         """转换为字典格式"""
@@ -42,7 +41,6 @@ class ModelArchitecture(Base):
             "id": self.id,
             "name": self.name,
             "description": self.description or "",
-            "version": self.version,
             "type": self.type,
             "file_path": self.file_path,
             "file_name": self.file_name,

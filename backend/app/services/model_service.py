@@ -95,7 +95,6 @@ class ModelArchitectureService:
             # 更新数据库记录
             existing.name = data.name  # 名称也可能修改
             existing.description = data.description
-            existing.version = data.version
             existing.type = data.type
             existing.node_count = len(data.nodes)
             existing.connection_count = len(data.connections)
@@ -128,7 +127,6 @@ class ModelArchitectureService:
             architecture = ModelArchitecture(
                 name=data.name,
                 description=data.description,
-                version=data.version,
                 type=data.type,
                 file_path=str(file_path),
                 file_name=file_name,
@@ -194,8 +192,6 @@ class ModelArchitectureService:
             architecture.name = data.name
         if data.description is not None:
             architecture.description = data.description
-        if data.version is not None:
-            architecture.version = data.version
         if data.type is not None:
             architecture.type = data.type
 
@@ -215,7 +211,6 @@ class ModelArchitectureService:
             file_data = {
                 "name": architecture.name,
                 "description": architecture.description,
-                "version": architecture.version,
                 "type": architecture.type,
                 "nodes": nodes,
                 "connections": connections,
@@ -260,7 +255,6 @@ class ModelArchitectureService:
                 "id": architecture.id,
                 "name": architecture.name,
                 "description": architecture.description or "",
-                "version": architecture.version,
                 "type": architecture.type,
                 "nodes": architecture.meta.get("nodes", []) if architecture.meta else [],
                 "connections": architecture.meta.get("connections", []) if architecture.meta else [],

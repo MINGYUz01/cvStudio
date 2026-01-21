@@ -83,7 +83,6 @@ interface ModelData {
   id: string;              // 前端使用的ID（格式：server_{db_id} 或 local_*）
   arch_id?: number;        // 数据库中的架构ID
   name: string;
-  version: string;
   status: string;
   type: string;
   updated: string;
@@ -588,7 +587,6 @@ const ModelBuilder: React.FC = () => {
           id: `server_${arch.id}`,
           arch_id: arch.id,              // 数据库ID
           name: arch.name,
-          version: arch.version,
           status: 'Ready',
           type: arch.type,
           description: arch.description || '',  // 模型描述
@@ -1624,7 +1622,6 @@ const ModelBuilder: React.FC = () => {
       const architecture = {
         name: modelName,
         description: '',
-        version: 'v1.0',
         type: 'Custom',
         nodes: nodes,
         connections: connections
@@ -1679,7 +1676,6 @@ const ModelBuilder: React.FC = () => {
 
     const data = {
       name: modelName,
-      version: 'v1.0',
       type: 'Custom',
       description: '',
       nodes: nodes,
@@ -2017,22 +2013,22 @@ const ModelBuilder: React.FC = () => {
 
                                 {/* 底部统计信息 */}
                                 <div className="mt-auto pt-3 border-t border-slate-800/50">
-                                    <div className="grid grid-cols-4 gap-2 text-center">
-                                        <div className="flex flex-col">
-                                            <span className="text-[10px] text-slate-600">层数</span>
-                                            <span className="text-sm font-semibold text-cyan-400">{model.node_count || model.nodes?.length || 0}</span>
+                                    <div className="flex items-center justify-between">
+                                        {/* 左侧：层数和连接 */}
+                                        <div className="flex gap-4">
+                                            <div className="flex flex-col">
+                                                <span className="text-[10px] text-slate-600">层数</span>
+                                                <span className="text-sm font-semibold text-cyan-400">{model.node_count || model.nodes?.length || 0}</span>
+                                            </div>
+                                            <div className="flex flex-col">
+                                                <span className="text-[10px] text-slate-600">连接</span>
+                                                <span className="text-sm font-semibold text-purple-400">{model.connection_count || model.connections?.length || 0}</span>
+                                            </div>
                                         </div>
-                                        <div className="flex flex-col">
-                                            <span className="text-[10px] text-slate-600">连接</span>
-                                            <span className="text-sm font-semibold text-purple-400">{model.connection_count || model.connections?.length || 0}</span>
-                                        </div>
-                                        <div className="flex flex-col">
-                                            <span className="text-[10px] text-slate-600">版本</span>
-                                            <span className="text-sm font-semibold text-slate-300">{model.version}</span>
-                                        </div>
-                                        <div className="flex flex-col">
+                                        {/* 右侧：更新时间 */}
+                                        <div className="flex flex-col items-end">
                                             <span className="text-[10px] text-slate-600">更新</span>
-                                            <span className="text-xs text-slate-400 truncate" title={model.updated}>{formatDate(model.updated)}</span>
+                                            <span className="text-xs text-slate-400" title={model.updated}>{formatDate(model.updated)}</span>
                                         </div>
                                     </div>
                                 </div>

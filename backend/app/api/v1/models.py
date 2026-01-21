@@ -746,7 +746,6 @@ async def save_architecture(
         create_data = ModelArchitectureCreate(
             name=architecture.name,
             description=architecture.description,
-            version=architecture.version,
             type=architecture.type,
             nodes=architecture.nodes,
             connections=architecture.connections
@@ -809,7 +808,6 @@ async def list_architectures(
                 "id": arch.id,
                 "name": arch.name,
                 "description": arch.description or "",
-                "version": arch.version,
                 "type": arch.type,
                 "node_count": arch.node_count,
                 "connection_count": arch.connection_count,

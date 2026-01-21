@@ -15,7 +15,6 @@ class ModelArchitectureBase(BaseModel):
     """模型架构基础模式"""
     name: str = Field(..., min_length=1, max_length=100, description="架构名称")
     description: Optional[str] = Field(None, max_length=1000, description="架构描述")
-    version: str = Field("v1.0", max_length=20, description="版本号")
     type: str = Field("Custom", max_length=50, description="模型类型")
 
 
@@ -29,7 +28,6 @@ class ModelArchitectureUpdate(BaseModel):
     """更新模型架构模式"""
     name: Optional[str] = Field(None, min_length=1, max_length=100, description="架构名称")
     description: Optional[str] = Field(None, max_length=1000, description="架构描述")
-    version: Optional[str] = Field(None, max_length=20, description="版本号")
     type: Optional[str] = Field(None, max_length=50, description="模型类型")
     nodes: Optional[List[Dict[str, Any]]] = Field(None, description="节点列表")
     connections: Optional[List[Dict[str, Any]]] = Field(None, description="连接列表")
@@ -56,7 +54,6 @@ class ModelArchitectureListItem(BaseModel):
     id: int
     name: str
     description: str
-    version: str
     type: str
     node_count: int
     connection_count: int
