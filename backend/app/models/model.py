@@ -31,38 +31,3 @@ class Model(Base):
 
     def __repr__(self):
         return f"<Model(id={self.id}, name='{self.name}', version='{self.version}')>"
-
-
-class PresetModel(Base):
-    """预设模型模板"""
-    __tablename__ = "preset_models"
-
-    id = Column(Integer, primary_key=True, index=True)
-    name = Column(String(100), nullable=False, index=True)
-    description = Column(Text, nullable=True)
-    category = Column(String(50), nullable=False)  # cnn, rnn, transformer, classification, detection
-    difficulty = Column(String(20), nullable=False)  # beginner, intermediate, advanced
-    tags = Column(JSON, nullable=True)  # ["cnn", "classification", "classic"]
-    thumbnail = Column(Text, nullable=True)  # base64编码的缩略图
-    architecture_data = Column(JSON, nullable=False)  # 完整的架构JSON，包含nodes和connections
-    extra_metadata = Column(JSON, nullable=True)  # 额外元数据（input_shape, output_shape等）
-    is_active = Column(Boolean, default=True)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
-
-    @property
-    def node_count(self) -> int:
-        """获取节点数量"""
-        if self.architecture_data and "nodes" in self.architecture_data:
-            return len(self.architecture_data["nodes"])
-        return 0
-
-    @property
-    def connection_count(self) -> int:
-        """获取连接数量"""
-        if self.architecture_data and "connections" in self.architecture_data:
-            return len(self.architecture_data["connections"])
-        return 0
-
-    def __repr__(self):
-        return f"<PresetModel(id={self.id}, name='{self.name}', category='{self.category}')>"
