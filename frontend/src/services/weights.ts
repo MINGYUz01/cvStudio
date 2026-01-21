@@ -323,14 +323,28 @@ class WeightService {
   }
 
   /**
-   * 获取按架构筛选的权重树（用于预训练权重选择）
+   * 获取按模型代码筛选的权重树（用于预训练权重选择）
+   * 当提供 modelCodeId 时，只返回该模型训练产生的权重
    */
   async getWeightTreeByArchitecture(
-    architectureId?: number,
+    modelCodeId?: number,
     taskType?: TaskType
   ): Promise<WeightTreeItem[]> {
     const params: any = {};
-    if (architectureId) params.architecture_id = architectureId;
+    if (modelCodeId) params.model_code_id = modelCodeId;
+    if (taskType) params.task_type = taskType;
+    return await apiClient.get<WeightTreeItem[]>('/weights/tree-by-architecture', params);
+  }
+
+  /**
+   * 按架构ID筛选权重（旧版API，保留兼容）
+   * @deprecated 建议使用 getWeightTreeByArchitecture 并传入 modelCodeId
+   */
+  async getWeightTreeByArchitectureId(
+    architectureId: number,
+    taskType?: TaskType
+  ): Promise<WeightTreeItem[]> {
+    const params: any = { architecture_id: architectureId };
     if (taskType) params.task_type = taskType;
     return await apiClient.get<WeightTreeItem[]>('/weights/tree-by-architecture', params);
   }

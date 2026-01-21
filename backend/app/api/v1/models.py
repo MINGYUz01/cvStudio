@@ -40,7 +40,8 @@ from app.schemas.model import (
     GeneratedCodeResponse,
     GeneratedCodeList
 )
-from app.dependencies import get_db
+from app.dependencies import get_db, get_current_user
+from app.models.user import User
 
 
 router = APIRouter()
@@ -588,13 +589,18 @@ async def save_code_to_library(
         if not code:
             raise HTTPException(400, "代码内容不能为空")
 
+        # 构建完整的meta信息，确保至少包含class_name
+        final_meta = meta.copy() if meta else {}
+        if "class_name" not in final_meta:
+            final_meta["class_name"] = model_name
+
         # 保存到数据库和文件（GeneratedCode表）
         saved_code = code_service.create_code(
             db=db,
             name=model_name,
             code=code,
             template_tag=template_tag,
-            meta=meta
+            meta=final_meta
         )
 
         # 同时创建Model表记录，用于训练
@@ -670,29 +676,50 @@ async def list_trainable_models(
     """
     获取可训练模型列表
 
-    返回Model表中的所有可训练模型，这些模型包含生成的代码文件。
+    返回Model表中的所有可训练模型。
+    Model表的id与TrainingRun.model_id正确关联，确保训练和权重筛选功能正常。
     """
     try:
-        from app.models.model import Model as ModelTable
+        from app.models.model import Model
+        from app.models.generated_code import GeneratedCode
 
-        models = db.query(ModelTable).filter(
-            ModelTable.is_active == "active"
+        # 从Model表获取所有可训练模型
+        models = db.query(Model).filter(
+            Model.is_active == "active"
         ).order_by(
-            ModelTable.updated_at.desc()
+            Model.created_at.desc()
         ).all()
 
         result = []
         for m in models:
+            # 尝试获取关联的GeneratedCode信息
+            code = db.query(GeneratedCode).filter(
+                GeneratedCode.file_path == m.code_path,
+                GeneratedCode.is_active == "active"
+            ).first()
+
+            # 从GeneratedCode的meta或Model的graph_json中获取class_name
+            class_name = "Model"
+            if code and code.meta and isinstance(code.meta, dict):
+                class_name = code.meta.get("class_name", "Model")
+            elif m.graph_json and isinstance(m.graph_json, dict):
+                class_name = m.graph_json.get("class_name", "Model")
+
+            # 获取描述
+            description = m.description or ""
+            if not description and code and code.meta and isinstance(code.meta, dict):
+                description = code.meta.get("description", "")
+
             result.append({
-                "id": m.id,
+                "id": m.id,  # 使用Model表的ID（与TrainingRun.model_id匹配）
                 "name": m.name,
-                "description": m.description,
+                "description": description,
                 "code_path": m.code_path,
                 "version": m.version,
                 "created_at": m.created_at.isoformat() if m.created_at else None,
                 "updated_at": m.updated_at.isoformat() if m.updated_at else None,
-                "has_code": bool(m.code_path),
-                "class_name": m.graph_json.get("class_name", "Model") if m.graph_json else "Model"
+                "has_code": True,
+                "class_name": class_name
             })
 
         debug_log(f"获取可训练模型列表: 共{len(result)}个")
@@ -731,7 +758,8 @@ async def save_architecture(
     overwrite: bool = Query(False, description="是否覆盖同名架构"),
     target_id: Optional[int] = Query(None, description="指定目标ID（用于更新）"),
     target_filename: Optional[str] = Query(None, description="指定目标文件名（用于更新，兼容旧版本）"),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     """
     保存模型架构到数据库
@@ -762,7 +790,7 @@ async def save_architecture(
         saved_arch = architecture_service.create_architecture(
             db=db,
             data=create_data,
-            user_id=None,  # TODO: 从认证中获取用户ID
+            user_id=current_user.id if current_user else None,
             overwrite=overwrite,
             target_filename=update_target
         )

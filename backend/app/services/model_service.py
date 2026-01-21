@@ -224,14 +224,19 @@ class ModelArchitectureService:
 
     def delete_architecture(self, db: Session, architecture_id: int, physical: bool = True) -> bool:
         """
-        删除架构
+        删除架构（硬删除，从数据库中真正删除）
 
         Args:
             db: 数据库会话
             architecture_id: 架构ID
             physical: 是否同时删除物理文件
         """
-        architecture = self.get_architecture(db, architecture_id)
+        # 不使用 is_active 过滤，直接查找
+        from app.models.model_architecture import ModelArchitecture
+        architecture = db.query(ModelArchitecture).filter(
+            ModelArchitecture.id == architecture_id
+        ).first()
+
         if not architecture:
             return False
 
@@ -239,11 +244,17 @@ class ModelArchitectureService:
         if physical:
             file_path = Path(architecture.file_path)
             if file_path.exists():
-                file_path.unlink()
+                try:
+                    file_path.unlink()
+                    print(f"[ModelArchitectureService] 已删除架构文件: {file_path}")
+                except Exception as e:
+                    print(f"[ModelArchitectureService] 删除架构文件失败: {file_path}, 错误: {e}")
 
-        # 软删除（标记为deleted）
-        architecture.is_active = "deleted"
+        # 硬删除：从数据库中真正删除记录
+        db.delete(architecture)
         db.commit()
+
+        print(f"[ModelArchitectureService] 架构已从数据库删除: ID={architecture_id}, 名称={architecture.name}")
         return True
 
     def load_architecture_file(self, architecture: ModelArchitecture) -> Dict[str, Any]:

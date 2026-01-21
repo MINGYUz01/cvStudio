@@ -596,8 +596,10 @@ const TrainingMonitor: React.FC = () => {
 
   // 加载可用于训练的预训练权重（树形结构）
   const fetchPretrainedWeights = useCallback(async (modelId: number, taskType: TaskType) => {
+    console.log('[DEBUG] fetchPretrainedWeights 调用:', { modelId, taskType });
     try {
       const data = await weightService.getWeightTreeByArchitecture(modelId, taskType);
+      console.log('[DEBUG] fetchPretrainedWeights 返回:', data);
       // 转换为 WeightTreeSelectOption 格式
       const convertToTreeSelectOption = (item: WeightTreeItem): WeightTreeSelectOption => ({
         id: item.id,
@@ -609,6 +611,7 @@ const TrainingMonitor: React.FC = () => {
         children: item.children?.map(convertToTreeSelectOption)
       });
       const converted = data.map(convertToTreeSelectOption);
+      console.log('[DEBUG] 转换后的权重列表:', converted);
       setAvailablePretrainedWeights(converted);
     } catch (err) {
       console.error('获取预训练权重失败:', err);
@@ -1487,11 +1490,20 @@ const TrainingMonitor: React.FC = () => {
                                             className="w-full bg-slate-950 border border-slate-700 rounded pl-9 pr-3 py-2 text-white text-sm outline-none focus:border-cyan-500 transition-colors appearance-none cursor-pointer"
                                         >
                                             <option value="">选择自定义模型...</option>
-                                            {modelFiles.map((mf) => (
-                                                <option key={mf.id} value={mf.id} title={mf.file_name}>
-                                                    {mf.name} {mf.has_code ? '✓' : '(无代码)'} - {mf.class_name || 'Model'}
-                                                </option>
-                                            ))}
+                                            {modelFiles.map((mf) => {
+                                                // 格式化时间显示为 MM-DD HH:mm 格式
+                                                const timeStr = mf.created ? new Date(mf.created).toLocaleString('zh-CN', {
+                                                    month: '2-digit',
+                                                    day: '2-digit',
+                                                    hour: '2-digit',
+                                                    minute: '2-digit'
+                                                }) : '';
+                                                return (
+                                                    <option key={mf.id} value={mf.id} title={`${mf.file_name}\n创建时间: ${mf.created}`}>
+                                                        {mf.name} [{timeStr}]
+                                                    </option>
+                                                );
+                                            })}
                                         </select>
                                         <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none" />
                                     </div>

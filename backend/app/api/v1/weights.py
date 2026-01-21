@@ -315,28 +315,70 @@ async def get_weights_for_training(
         raise HTTPException(500, f"获取可用于训练的权重失败: {str(e)}")
 
 
+@router.get("/debug-info")
+async def get_debug_info(db: Session = Depends(get_db)):
+    """临时调试接口：查看数据库中的关系"""
+    from app.models.training import TrainingRun
+    from app.models.weight_library import WeightLibrary
+    from app.models.generated_code import GeneratedCode
+
+    # 获取所有模型代码
+    all_models = db.query(GeneratedCode).filter(GeneratedCode.is_active == "active").all()
+    models_info = [{"id": m.id, "name": m.name} for m in all_models]
+
+    # 获取所有训练任务
+    all_runs = db.query(TrainingRun).all()
+    runs_info = [{"id": r.id, "name": r.name, "model_id": r.model_id} for r in all_runs]
+
+    # 获取所有权重
+    all_weights = db.query(WeightLibrary).filter(WeightLibrary.is_root == True).all()
+    weights_info = [{"id": w.id, "name": w.name, "source_training_id": w.source_training_id} for w in all_weights]
+
+    return {
+        "models": models_info,
+        "training_runs": runs_info,
+        "weights": weights_info
+    }
+
+
 @router.get("/tree-by-architecture", response_model=List[WeightTreeResponse])
 async def get_weight_tree_by_architecture(
-    architecture_id: Optional[int] = Query(None, description="模型架构ID"),
+    model_code_id: Optional[int] = Query(None, description="模型代码ID（GeneratedCode）"),
+    architecture_id: Optional[int] = Query(None, description="模型架构ID（旧逻辑，保留兼容）"),
     task_type: Optional[str] = Query(None, description="任务类型"),
     db: Session = Depends(get_db)
 ):
     """
-    获取按架构筛选的权重树形结构
+    获取按模型代码筛选的权重树形结构
 
-    返回指定模型架构和任务类型的权重树（用于预训练权重选择）
+    返回指定模型代码训练产生的权重树（用于预训练权重选择）。
+    当提供 model_code_id 时，只返回该模型训练产生的权重；
+    否则使用旧的 architecture_id 逻辑（兼容旧版）。
     """
+    logger.info(f"[API] /tree-by-architecture 调用: model_code_id={model_code_id}, architecture_id={architecture_id}, task_type={task_type}")
+
+    # 调试：打印数据库中的关键信息
+    if model_code_id:
+        from app.models.training import TrainingRun
+        from app.models.weight_library import WeightLibrary
+        all_runs = db.query(TrainingRun).all()
+        logger.info(f"[DEBUG] 所有训练任务: {[(r.id, r.name, r.model_id) for r in all_runs]}")
+        all_weights = db.query(WeightLibrary).filter(WeightLibrary.is_root == True).all()
+        logger.info(f"[DEBUG] 所有根节点权重: {[(w.id, w.name, w.source_training_id) for w in all_weights]}")
+
     try:
         trees = weight_service.get_weight_tree_by_architecture(
             db=db,
             architecture_id=architecture_id,
+            model_code_id=model_code_id,
             task_type=task_type
         )
+        logger.info(f"[API] /tree-by-architecture 返回 {len(trees)} 个权重树")
         return trees
 
     except Exception as e:
-        logger.error(f"获取按架构筛选的权重树失败: {e}")
-        raise HTTPException(500, f"获取按架构筛选的权重树失败: {str(e)}")
+        logger.error(f"获取权重树失败: {e}")
+        raise HTTPException(500, f"获取权重树失败: {str(e)}")
 
 
 @router.get("/by-task/{task_type}", response_model=WeightLibraryList)

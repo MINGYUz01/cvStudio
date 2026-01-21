@@ -380,7 +380,7 @@ class WeightLibraryService:
 
     def delete_weight(self, db: Session, weight_id: int) -> bool:
         """
-        删除权重
+        删除权重（包括所有子节点）
 
         Args:
             db: 数据库会话
@@ -397,17 +397,35 @@ class WeightLibraryService:
             if not weight:
                 return False
 
-            # 删除文件
-            file_path = Path(weight.file_path)
-            if file_path.exists():
-                file_path.unlink()
-                self.logger.info(f"已删除权重文件: {file_path}")
+            # 递归删除所有子节点
+            def delete_recursive(w):
+                # 找到所有子节点（parent_version_id 指向当前节点的）
+                children = db.query(WeightLibrary).filter(
+                    WeightLibrary.parent_version_id == w.id
+                ).all()
 
-            # 删除数据库记录
-            db.delete(weight)
+                # 先递归删除子节点
+                for child in children:
+                    delete_recursive(child)
+
+                # 删除当前节点的文件
+                file_path = Path(w.file_path)
+                if file_path.exists():
+                    try:
+                        file_path.unlink()
+                        self.logger.info(f"已删除权重文件: {file_path}")
+                    except Exception as e:
+                        self.logger.warning(f"删除权重文件失败: {file_path}, 错误: {e}")
+
+                # 删除数据库记录
+                db.delete(w)
+
+            # 执行递归删除
+            delete_recursive(weight)
+
             db.commit()
 
-            self.logger.info(f"权重已删除: ID={weight_id}")
+            self.logger.info(f"权重及其子节点已删除: ID={weight_id}")
             return True
 
         except Exception as e:
@@ -750,6 +768,7 @@ class WeightLibraryService:
         self,
         db: Session,
         architecture_id: Optional[int] = None,
+        model_code_id: Optional[int] = None,
         task_type: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """
@@ -757,35 +776,84 @@ class WeightLibraryService:
 
         Args:
             db: 数据库会话
-            architecture_id: 模型架构ID筛选
+            architecture_id: 模型架构ID筛选（旧逻辑，保留兼容）
+            model_code_id: 模型ID（Model表），筛选该模型训练产生的权重
             task_type: 任务类型筛选
 
         Returns:
             权重树列表（每个根节点包含其所有子节点）
         """
         try:
-            # 获取根节点
-            query = db.query(WeightLibrary).filter(
-                WeightLibrary.is_root == True
-            )
+            self.logger.info(f"[权重筛选] API调用: model_code_id={model_code_id}, architecture_id={architecture_id}, task_type={task_type}")
 
-            if architecture_id:
-                query = query.filter(WeightLibrary.architecture_id == architecture_id)
+            # 如果提供了 model_code_id，筛选该模型训练产生的权重
+            if model_code_id:
+                from app.models.training import TrainingRun
+                from app.models.model import Model
+
+                # 验证模型是否存在（Model表）
+                model = db.query(Model).filter(
+                    Model.id == model_code_id,
+                    Model.is_active == "active"
+                ).first()
+
+                if not model:
+                    self.logger.warning(f"模型不存在: model_code_id={model_code_id}")
+                    return []
+
+                # 找到使用此模型训练的所有任务（TrainingRun.model_id 指向 Model.id）
+                training_runs = db.query(TrainingRun).filter(
+                    TrainingRun.model_id == model_code_id
+                ).all()
+                training_ids = [tr.id for tr in training_runs]
+
+                self.logger.info(f"[权重筛选] model_code_id={model_code_id}, 模型名={model.name}, 找到 {len(training_ids)} 个训练任务: {training_ids}")
+
+                # 打印每个训练任务的详细信息
+                for tr in training_runs:
+                    self.logger.info(f"[权重筛选]   训练任务: id={tr.id}, name={tr.name}, model_id={tr.model_id}")
+
+                if not training_ids:
+                    self.logger.debug(f"模型 {model.name} 尚未训练过")
+                    return []
+
+                # 找到这些训练任务产生的权重（只返回根节点）
+                query = db.query(WeightLibrary).filter(
+                    WeightLibrary.source_training_id.in_(training_ids),
+                    WeightLibrary.is_root == True
+                )
+
+                self.logger.info(f"[权重筛选] 筛选条件: source_training_id IN {training_ids}, is_root=True")
+
+            else:
+                # 原有逻辑，使用 architecture_id 筛选（兼容旧版）
+                query = db.query(WeightLibrary).filter(
+                    WeightLibrary.is_root == True
+                )
+
+                if architecture_id:
+                    query = query.filter(WeightLibrary.architecture_id == architecture_id)
 
             if task_type:
                 query = query.filter(WeightLibrary.task_type == task_type)
 
             roots = query.order_by(WeightLibrary.created_at.desc()).all()
 
+            # 记录查询结果
+            if model_code_id:
+                self.logger.info(f"[权重筛选] 实际找到 {len(roots)} 个权重根节点")
+                for r in roots:
+                    self.logger.info(f"[权重筛选]   - 权重: {r.name} (id={r.id}, source_training_id={r.source_training_id})")
+
             trees = []
             for root in roots:
                 trees.append(self._build_subtree(db, root))
 
-            self.logger.debug(f"获取按架构筛选的权重树: {len(trees)} 个根节点")
+            self.logger.debug(f"获取权重树: {len(trees)} 个根节点")
             return trees
 
         except Exception as e:
-            self.logger.error(f"获取按架构筛选的权重树失败: {e}")
+            self.logger.error(f"获取权重树失败: {e}")
             return []
 
     def get_weight_training_config(
