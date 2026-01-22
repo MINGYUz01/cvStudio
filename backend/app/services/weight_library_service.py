@@ -807,10 +807,10 @@ class WeightLibraryService:
         try:
             self.logger.info(f"[权重筛选] API调用: model_code_id={model_code_id}, architecture_id={architecture_id}, task_type={task_type}")
 
-            # 如果提供了 model_code_id，筛选该模型训练产生的权重
+            # 如果提供了 model_code_id，先找到对应的 GeneratedCode，再按 generated_code_id 筛选
             if model_code_id:
-                from app.models.training import TrainingRun
                 from app.models.model import Model
+                from app.models.generated_code import GeneratedCode
 
                 # 验证模型是否存在（Model表）
                 model = db.query(Model).filter(
@@ -822,32 +822,35 @@ class WeightLibraryService:
                     self.logger.warning(f"模型不存在: model_code_id={model_code_id}")
                     return []
 
-                # 找到使用此模型训练的所有任务（TrainingRun.model_id 指向 Model.id）
-                training_runs = db.query(TrainingRun).filter(
-                    TrainingRun.model_id == model_code_id
-                ).all()
-                training_ids = [tr.id for tr in training_runs]
+                # 找到对应的 GeneratedCode（通过 Model.code_path == GeneratedCode.file_path）
+                generated_code = db.query(GeneratedCode).filter(
+                    GeneratedCode.file_path == model.code_path,
+                    GeneratedCode.is_active == "active"
+                ).first()
 
-                self.logger.info(f"[权重筛选] model_code_id={model_code_id}, 模型名={model.name}, 找到 {len(training_ids)} 个训练任务: {training_ids}")
-
-                # 打印每个训练任务的详细信息
-                for tr in training_runs:
-                    self.logger.info(f"[权重筛选]   训练任务: id={tr.id}, name={tr.name}, model_id={tr.model_id}")
-
-                if not training_ids:
-                    self.logger.debug(f"模型 {model.name} 尚未训练过")
+                if not generated_code:
+                    self.logger.warning(f"未找到对应的 GeneratedCode: model_code_id={model_code_id}, code_path={model.code_path}")
                     return []
 
-                # 找到这些训练任务产生的权重（只返回根节点）
+                self.logger.info(f"[权重筛选] Model.id={model_code_id}, GeneratedCode.id={generated_code.id}, name={generated_code.name}")
+
+                # 按 generated_code_id 筛选权重（新逻辑）
+                # 只返回根节点（is_root=True），子节点通过 _build_subtree 自动加载
                 query = db.query(WeightLibrary).filter(
-                    WeightLibrary.source_training_id.in_(training_ids),
-                    WeightLibrary.is_root == True
+                    WeightLibrary.generated_code_id == generated_code.id,
+                    WeightLibrary.source_type == "trained",  # 只显示训练产生的权重
+                    WeightLibrary.is_root == True  # 只返回根节点
                 )
 
-                self.logger.info(f"[权重筛选] 筛选条件: source_training_id IN {training_ids}, is_root=True")
+                self.logger.info(f"[权重筛选] 筛选条件: generated_code_id={generated_code.id}, source_type=trained, is_root=True")
 
             else:
                 # 原有逻辑，使用 architecture_id 筛选（兼容旧版）
+                # 如果没有提供任何筛选条件，返回空数组，而不是返回所有权重
+                if not architecture_id:
+                    self.logger.info("[权重筛选] 无筛选参数，返回空数组")
+                    return []
+
                 query = db.query(WeightLibrary).filter(
                     WeightLibrary.is_root == True
                 )

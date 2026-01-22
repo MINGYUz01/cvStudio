@@ -967,6 +967,18 @@ class TrainingService:
 
             # 创建权重库记录
             from app.models.weight_library import WeightLibrary
+            from app.models.generated_code import GeneratedCode
+
+            # 找到对应的 GeneratedCode（通过 Model.code_path == GeneratedCode.file_path）
+            generated_code_id = None
+            if training_run.model and training_run.model.code_path:
+                generated_code = db.query(GeneratedCode).filter(
+                    GeneratedCode.file_path == training_run.model.code_path,
+                    GeneratedCode.is_active == "active"
+                ).first()
+                if generated_code:
+                    generated_code_id = generated_code.id
+                    self.logger.info(f"[权重保存] 找到 GeneratedCode: id={generated_code.id}, name={generated_code.name}")
 
             # 确定best权重是否为根节点
             best_is_root = parent_weight_id is None
@@ -986,7 +998,8 @@ class TrainingService:
                 source_type="trained",
                 source_training_id=training_run_id,
                 is_root=best_is_root,
-                architecture_id=training_run.model_id
+                architecture_id=training_run.model_id,  # 保留旧字段
+                generated_code_id=generated_code_id  # 新字段：记录 GeneratedCode.id
             )
             db.add(best_weight)
             db.flush()  # 获取ID但不提交
@@ -1033,7 +1046,8 @@ class TrainingService:
                     source_type="trained",
                     source_training_id=training_run_id,
                     is_root=False,  # last永远不是根节点
-                    architecture_id=training_run.model_id
+                    architecture_id=training_run.model_id,  # 保留旧字段
+                    generated_code_id=generated_code_id  # 新字段：记录 GeneratedCode.id
                 )
                 db.add(last_weight_record)
 

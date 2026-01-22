@@ -100,9 +100,12 @@ class ApiClient {
     if (params) {
       const searchParams = new URLSearchParams();
       Object.entries(params).forEach(([key, value]) => {
+        // 调试日志
+        console.log(`[DEBUG] API 请求参数: ${key} = ${value}`);
         searchParams.append(key, String(value));
       });
       url += `?${searchParams.toString()}`;
+      console.log(`[DEBUG] 完整URL: ${url}`);
     }
 
     // 添加认证token

@@ -51,7 +51,8 @@ class WeightLibrary(Base):
     source_type = Column(String(20), default="uploaded", comment="来源类型: uploaded/trained")
     source_training_id = Column(Integer, ForeignKey("training_runs.id"), nullable=True, comment="来源训练任务ID")
     is_root = Column(Boolean, default=True, comment="是否为根节点(导入权重或best权重)")
-    architecture_id = Column(Integer, ForeignKey("model_architectures.id"), nullable=True, comment="关联的模型架构ID")
+    architecture_id = Column(Integer, ForeignKey("model_architectures.id"), nullable=True, comment="关联的模型架构ID（旧字段，保留兼容）")
+    generated_code_id = Column(Integer, ForeignKey("generated_codes.id"), nullable=True, comment="关联的模型代码ID（GeneratedCode表）")
 
     # 用户信息
     uploaded_by = Column(Integer, ForeignKey("users.id"), nullable=True, comment="上传用户ID")
@@ -66,6 +67,7 @@ class WeightLibrary(Base):
     child_versions = relationship("WeightLibrary", foreign_keys=[parent_version_id], remote_side=[id], overlaps="parent_version")
     source_training = relationship("TrainingRun", foreign_keys=[source_training_id])
     architecture = relationship("ModelArchitecture", back_populates="weights")
+    generated_code = relationship("GeneratedCode", foreign_keys=[generated_code_id])
 
     def __repr__(self):
         return f"<WeightLibrary(id={self.id}, name='{self.name}', task_type='{self.task_type}', version='{self.version}')>"
@@ -95,6 +97,7 @@ class WeightLibrary(Base):
             "source_training_id": self.source_training_id,
             "is_root": self.is_root,
             "architecture_id": self.architecture_id,
+            "generated_code_id": self.generated_code_id,
             "parent_version_id": self.parent_version_id,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,

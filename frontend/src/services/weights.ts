@@ -372,15 +372,27 @@ class WeightService {
   /**
    * 获取按模型代码筛选的权重树（用于预训练权重选择）
    * 当提供 modelCodeId 时，只返回该模型训练产生的权重
+   *
+   * 注意：modelCodeId 是必需参数，没有提供时返回空数组
    */
   async getWeightTreeByArchitecture(
     modelCodeId?: number,
     taskType?: TaskType
   ): Promise<WeightTreeItem[]> {
-    const params: any = {};
-    if (modelCodeId) params.model_code_id = modelCodeId;
+    // 如果没有 modelCodeId，直接返回空数组，避免返回所有权重
+    if (!modelCodeId) {
+      console.log('[DEBUG] getWeightTreeByArchitecture: modelCodeId 为空，返回空数组');
+      return [];
+    }
+
+    const params: any = {
+      model_code_id: modelCodeId
+    };
     if (taskType) params.task_type = taskType;
-    return await apiClient.get<WeightTreeItem[]>('/weights/tree-by-architecture', params);
+
+    console.log('[DEBUG] getWeightTreeByArchitecture 调用 API:', { endpoint: '/weights/tree-by-architecture', params });
+
+    return await apiClient.get<WeightTreeItem[]>('/weights/tree-by-architecture', { params });
   }
 
   /**
@@ -393,7 +405,7 @@ class WeightService {
   ): Promise<WeightTreeItem[]> {
     const params: any = { architecture_id: architectureId };
     if (taskType) params.task_type = taskType;
-    return await apiClient.get<WeightTreeItem[]>('/weights/tree-by-architecture', params);
+    return await apiClient.get<WeightTreeItem[]>('/weights/tree-by-architecture', { params });
   }
 }
 

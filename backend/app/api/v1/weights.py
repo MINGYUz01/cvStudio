@@ -354,7 +354,16 @@ async def get_weight_tree_by_architecture(
     返回指定模型代码训练产生的权重树（用于预训练权重选择）。
     当提供 model_code_id 时，只返回该模型训练产生的权重；
     否则使用旧的 architecture_id 逻辑（兼容旧版）。
+
+    注意：如果既没有提供 model_code_id 也没有提供 architecture_id，
+    将返回空数组，而不是返回所有权重。
     """
+    # 参数校验：如果两个筛选参数都没有提供，返回空数组
+    # 这样可以避免在模型未正确选择时返回所有权重
+    if not model_code_id and not architecture_id:
+        logger.info(f"[API] /tree-by-architecture 调用: 无筛选参数，返回空数组。原始查询参数: model_code_id={model_code_id}, architecture_id={architecture_id}")
+        return []
+
     logger.info(f"[API] /tree-by-architecture 调用: model_code_id={model_code_id}, architecture_id={architecture_id}, task_type={task_type}")
 
     # 调试：打印数据库中的关键信息

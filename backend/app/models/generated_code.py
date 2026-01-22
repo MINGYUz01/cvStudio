@@ -27,6 +27,7 @@ class GeneratedCode(Base):
 
     # 关联关系
     creator = relationship("User", back_populates="generated_codes")
+    weights = relationship("WeightLibrary", foreign_keys="WeightLibrary.generated_code_id")
 
     def __repr__(self):
         return f"<GeneratedCode(id={self.id}, name='{self.name}', file_name='{self.file_name}')>"
