@@ -5,7 +5,7 @@
 """
 
 from datetime import datetime
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Union
 from pydantic import BaseModel, Field
 
 
@@ -212,12 +212,60 @@ class WeightRootList(BaseModel):
     total: int
 
 
+# ==================== 训练配置详情相关模式 ====================
+
+class DatasetInfo(BaseModel):
+    """数据集信息"""
+    id: int
+    name: str
+    format: str
+    num_images: Optional[int] = None
+    num_classes: Optional[int] = None
+    classes: Optional[List[str]] = None
+    path: Optional[str] = None
+
+
+class ModelArchitectureInfo(BaseModel):
+    """模型架构信息"""
+    id: int
+    name: str
+    description: Optional[str] = None
+    file_path: Optional[str] = None
+    input_size: Optional[List[int]] = None
+    task_type: Optional[str] = None
+
+
+class PretrainedWeightInfo(BaseModel):
+    """预训练权重信息"""
+    id: int
+    name: str
+    display_name: str
+    task_type: str
+    version: str
+    source_type: str  # uploaded/trained
+
+
+class AugmentationConfigInfo(BaseModel):
+    """数据增强配置信息"""
+    enabled: bool = False
+    strategy: Optional[str] = None
+    strategy_id: Optional[int] = None
+    description: Optional[str] = None
+    config: Optional[Union[Dict[str, Any], List[Any]]] = None  # 支持字典和列表（pipeline）
+
+
 class WeightTrainingConfigResponse(BaseModel):
-    """权重训练配置响应模式"""
+    """权重训练配置响应模式（扩展版）"""
     weight_id: int
     weight_name: str
     training_config: Optional[Dict[str, Any]] = None
     source_training: Optional[Dict[str, Any]] = None
+
+    # 完整的关联信息
+    dataset: Optional[DatasetInfo] = None
+    model_architecture: Optional[ModelArchitectureInfo] = None
+    pretrained_weight: Optional[PretrainedWeightInfo] = None
+    augmentation: Optional[AugmentationConfigInfo] = None
 
 
 class WeightForTraining(BaseModel):

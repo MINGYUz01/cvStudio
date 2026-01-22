@@ -185,6 +185,13 @@ async def health_check():
     }
 
 
+@app.head("/queue")
+@app.get("/queue")
+async def queue_check():
+    """队列状态探针（用于外部监控工具健康检查）"""
+    return {"status": "ok"}
+
+
 if __name__ == "__main__":
     uvicorn.run(
         "main:app",

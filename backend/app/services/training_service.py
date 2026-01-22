@@ -11,6 +11,7 @@ from datetime import datetime
 import sys
 
 from app.models.training import TrainingRun
+from app.models.augmentation import AugmentationStrategy
 from app.utils.config_parser import TrainingConfigParser
 from app.utils.checkpoint_manager import CheckpointManager
 from app.utils.training_logger import training_logger, TrainingStatus
@@ -27,6 +28,26 @@ def debug_log(msg: str, level: str = "INFO"):
         logger.error(log_msg)
     elif level == "WARNING":
         logger.warning(log_msg)
+
+
+def _clean_model_name(name: str) -> str:
+    """
+    清理模型名称中的版本后缀
+
+    例如: "ResNet50 v1.0" -> "ResNet50"
+         "YOLOv8 v2.1.0" -> "YOLOv8"
+
+    Args:
+        name: 原始模型名称
+
+    Returns:
+        清理后的模型名称
+    """
+    import re
+    # 匹配版本模式: v + 数字格式 (如 v1.0, v2.1.0)
+    pattern = r'\s+v\d+(?:\.\d+)*\.?\s*$'
+    cleaned = re.sub(pattern, '', name)
+    return cleaned.strip()
 
 
 class TrainingService:
@@ -388,6 +409,150 @@ class TrainingService:
 
         except Exception as e:
             self.logger.error(f"获取训练任务失败: {e}")
+            return None
+
+    def get_training_config_detail(
+        self,
+        db: Session,
+        training_run_id: int
+    ) -> Optional[Dict[str, Any]]:
+        """
+        获取训练任务的完整配置详情
+
+        返回包含数据集、模型架构、预训练权重、数据增强等完整信息
+
+        Args:
+            db: 数据库会话
+            training_run_id: 训练任务ID
+
+        Returns:
+            包含完整配置信息的字典，如果训练任务不存在返回None
+        """
+        try:
+            training = db.query(TrainingRun).filter(
+                TrainingRun.id == training_run_id
+            ).first()
+
+            if not training:
+                return None
+
+            result = {
+                "id": training.id,
+                "name": training.name,
+                "description": training.description,
+                "status": training.status,
+                "created_at": training.created_at.isoformat() if training.created_at else None,
+                "hyperparams": training.hyperparams or {},
+                "dataset": None,
+                "model_architecture": None,
+                "pretrained_weight": None,
+                "augmentation": None
+            }
+
+            # 获取数据集信息
+            if training.dataset_id:
+                from app.models.dataset import Dataset
+                dataset = db.query(Dataset).filter(
+                    Dataset.id == training.dataset_id
+                ).first()
+                if dataset:
+                    result["dataset"] = {
+                        "id": dataset.id,
+                        "name": dataset.name,
+                        "format": dataset.format,
+                        "num_images": dataset.num_images,
+                        "num_classes": dataset.num_classes,
+                        "classes": dataset.classes,
+                        "path": dataset.path
+                    }
+
+            # 获取模型架构信息
+            if training.model_id:
+                from app.models.generated_code import GeneratedCode
+                model = db.query(GeneratedCode).filter(
+                    GeneratedCode.id == training.model_id,
+                    GeneratedCode.is_active == "active"
+                ).first()
+
+                if model:
+                    meta = model.meta if isinstance(model.meta, dict) else {}
+                    result["model_architecture"] = {
+                        "id": model.id,
+                        "name": _clean_model_name(model.name),
+                        "description": None,  # GeneratedCode 没有description字段
+                        "file_path": model.file_path,
+                        "input_size": meta.get("input_size"),
+                        "task_type": meta.get("task_type")
+                    }
+                else:
+                    # 兼容 Model 表
+                    from app.models.model import Model
+                    old_model = db.query(Model).filter(
+                        Model.id == training.model_id
+                    ).first()
+                    if old_model:
+                        import json
+                        graph_json = old_model.graph_json if isinstance(old_model.graph_json, dict) else \
+                            json.loads(old_model.graph_json) if old_model.graph_json else {}
+                        result["model_architecture"] = {
+                            "id": old_model.id,
+                            "name": _clean_model_name(old_model.name),
+                            "description": old_model.description,
+                            "file_path": old_model.code_path,
+                            "input_size": graph_json.get("input_size"),
+                            "task_type": graph_json.get("task_type")
+                        }
+
+            # 获取预训练权重信息
+            if training.pretrained_weight_id:
+                from app.models.weight_library import WeightLibrary
+                pretrained = db.query(WeightLibrary).filter(
+                    WeightLibrary.id == training.pretrained_weight_id
+                ).first()
+                if pretrained:
+                    result["pretrained_weight"] = {
+                        "id": pretrained.id,
+                        "name": pretrained.name,
+                        "display_name": pretrained.display_name,
+                        "task_type": pretrained.task_type,
+                        "version": pretrained.version,
+                        "source_type": pretrained.source_type
+                    }
+
+            # 解析数据增强配置
+            hyperparams = training.hyperparams or {}
+            aug_strategy_id = hyperparams.get("augmentation_strategy_id")
+
+            if aug_strategy_id:
+                # 通过 augmentation_strategy_id 获取策略详情
+                aug_strategy = db.query(AugmentationStrategy).filter(
+                    AugmentationStrategy.id == aug_strategy_id
+                ).first()
+                if aug_strategy:
+                    result["augmentation"] = {
+                        "enabled": True,
+                        "strategy": aug_strategy.name,
+                        "strategy_id": aug_strategy.id,
+                        "description": aug_strategy.description,
+                        "config": aug_strategy.pipeline
+                    }
+                else:
+                    result["augmentation"] = {"enabled": False}
+            elif "augmentation" in hyperparams:
+                # 兼容旧的 augmentation 对象格式
+                aug_config = hyperparams["augmentation"]
+                result["augmentation"] = {
+                    "enabled": aug_config.get("enabled", False),
+                    "strategy": aug_config.get("strategy"),
+                    "config": aug_config
+                }
+            else:
+                result["augmentation"] = {"enabled": False}
+
+            return result
+
+        except Exception as e:
+            self.logger.error(f"获取训练配置详情失败: {e}")
             return None
 
     def update_training_run(

@@ -14,6 +14,46 @@ export type TaskType = 'classification' | 'detection' | 'auto';
 
 export type Framework = 'pytorch' | 'onnx';
 
+// ==============================
+// 训练配置详情相关类型
+// ==============================
+
+export interface DatasetInfo {
+  id: number;
+  name: string;
+  format: string;
+  num_images?: number;
+  num_classes?: number;
+  classes?: string[];
+  path?: string;
+}
+
+export interface ModelArchitectureInfo {
+  id: number;
+  name: string;
+  description?: string;
+  file_path?: string;
+  input_size?: number[];
+  task_type?: string;
+}
+
+export interface PretrainedWeightInfo {
+  id: number;
+  name: string;
+  display_name: string;
+  task_type: string;
+  version: string;
+  source_type: 'uploaded' | 'trained';
+}
+
+export interface AugmentationConfigInfo {
+  enabled: boolean;
+  strategy?: string;
+  strategy_id?: number;
+  description?: string;
+  config?: Record<string, any> | any[];  // 支持对象和数组（pipeline）
+}
+
 export interface WeightUploadData {
   file: File;
   name: string;
@@ -87,8 +127,15 @@ export interface WeightTrainingConfig {
   source_training: {
     id: number;
     name: string;
-    hyperparams: Record<string, any>;
+    status?: string;
+    created_at?: string;
+    hyperparams?: Record<string, any>;
   } | null;
+  // 完整的关联信息
+  dataset?: DatasetInfo | null;
+  model_architecture?: ModelArchitectureInfo | null;
+  pretrained_weight?: PretrainedWeightInfo | null;
+  augmentation?: AugmentationConfigInfo | null;
 }
 
 export interface WeightForTrainingOption {

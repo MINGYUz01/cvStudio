@@ -4,8 +4,17 @@
 """
 
 from pydantic import BaseModel, Field
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, TYPE_CHECKING
 from datetime import datetime
+
+# 使用TYPE_CHECKING避免循环导入
+if TYPE_CHECKING:
+    from app.schemas.weight_library import (
+        DatasetInfo,
+        ModelArchitectureInfo,
+        PretrainedWeightInfo,
+        AugmentationConfigInfo
+    )
 
 
 class TrainingRunCreate(BaseModel):
@@ -379,3 +388,27 @@ class TrainingStatusResponse(BaseModel):
                 "duration": "2:15:30"
             }
         }
+
+
+# ==================== 训练配置详情相关模式 ====================
+
+class TrainingConfigDetailResponse(BaseModel):
+    """训练任务完整配置详情"""
+    # 训练任务基本信息
+    id: int
+    name: str
+    description: Optional[str] = None
+    status: str
+    created_at: datetime
+
+    # 超参数配置
+    hyperparams: Dict[str, Any]
+
+    # 关联资源信息（使用Dict避免循环导入）
+    dataset: Optional[Dict[str, Any]] = None
+    model_architecture: Optional[Dict[str, Any]] = None
+    pretrained_weight: Optional[Dict[str, Any]] = None
+    augmentation: Optional[Dict[str, Any]] = None
+
+    class Config:
+        from_attributes = True

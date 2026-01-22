@@ -134,6 +134,13 @@ class Trainer:
                 'device': str(self.device)
             })
             self.logger.info(f"数据加载器创建成功: 训练集{len(self.train_loader)}批次, 验证集{len(self.val_loader)}批次")
+
+            # 验证数据加载器是否有数据
+            if len(self.train_loader) == 0:
+                raise ValueError(
+                    f"训练数据集为空！请检查数据集路径 '{self.config.get('dataset_path')}' 是否正确，"
+                    f"以及数据集是否包含有效的图片数据。"
+                )
         except Exception as e:
             self.logger.error(f"数据加载器创建失败: {e}")
             raise
@@ -575,7 +582,8 @@ class Trainer:
             train_loss += loss.item()
 
         # 计算平均训练指标
-        avg_train_loss = train_loss / len(self.train_loader)
+        num_batches = len(self.train_loader)
+        avg_train_loss = train_loss / num_batches if num_batches > 0 else 0.0
         train_accuracy = train_correct / train_total if train_total > 0 else 0.0
 
         # 验证
@@ -662,7 +670,8 @@ class Trainer:
                 val_loss += loss.item()
 
         # 计算平均验证指标
-        avg_val_loss = val_loss / len(self.val_loader)
+        num_val_batches = len(self.val_loader)
+        avg_val_loss = val_loss / num_val_batches if num_val_batches > 0 else 0.0
         val_accuracy = val_correct / val_total if val_total > 0 else 0.0
 
         return {

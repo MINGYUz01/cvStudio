@@ -170,6 +170,72 @@ export interface SaveToWeightsResponse {
   last_weight?: WeightLibraryItem;
 }
 
+// ===== 训练配置详情相关类型 =====
+
+/**
+ * 数据集信息
+ */
+export interface DatasetInfo {
+  id: number;
+  name: string;
+  format: string;
+  num_images?: number;
+  num_classes?: number;
+  classes?: string[];
+  path?: string;
+}
+
+/**
+ * 模型架构信息
+ */
+export interface ModelArchitectureInfo {
+  id: number;
+  name: string;
+  description?: string;
+  file_path?: string;
+  input_size?: number[];
+  task_type?: string;
+}
+
+/**
+ * 预训练权重信息
+ */
+export interface PretrainedWeightInfo {
+  id: number;
+  name: string;
+  display_name: string;
+  task_type: string;
+  version: string;
+  source_type: 'uploaded' | 'trained';
+}
+
+/**
+ * 数据增强配置信息
+ */
+export interface AugmentationConfigInfo {
+  enabled: boolean;
+  strategy?: string;
+  strategy_id?: number;
+  description?: string;
+  config?: Record<string, any> | any[];  // 支持对象和数组（pipeline）
+}
+
+/**
+ * 训练配置详情
+ */
+export interface TrainingConfigDetail {
+  id: number;
+  name: string;
+  description?: string;
+  status: string;
+  created_at: string;
+  hyperparams: Record<string, any>;
+  dataset?: DatasetInfo | null;
+  model_architecture?: ModelArchitectureInfo | null;
+  pretrained_weight?: PretrainedWeightInfo | null;
+  augmentation?: AugmentationConfigInfo | null;
+}
+
 // ===== 服务类 =====
 
 /**
@@ -329,6 +395,15 @@ class TrainingServiceClass {
       `${this.baseUrl}/${id}/save-to-weights`,
       data
     );
+  }
+
+  /**
+   * 获取训练任务的完整配置详情
+   * @param id 训练任务ID
+   * @returns 训练配置详情
+   */
+  async getTrainingConfigDetail(id: number): Promise<TrainingConfigDetail> {
+    return apiClient.get<TrainingConfigDetail>(`${this.baseUrl}/${id}/config`);
   }
 }
 

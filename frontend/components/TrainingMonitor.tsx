@@ -203,28 +203,6 @@ const TaskIcon: React.FC<{ task: TaskType }> = ({ task }) => {
     }
 };
 
-const ConfigPreviewModal: React.FC<{ isOpen: boolean; onClose: () => void; config: any }> = ({ isOpen, onClose, config }) => {
-    if (!isOpen) return null;
-    return (
-        <div className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-            <div className="bg-slate-900 border border-slate-700 rounded-xl w-full max-w-lg shadow-2xl animate-in fade-in zoom-in duration-200">
-                <div className="flex justify-between items-center p-4 border-b border-slate-700 bg-slate-950/50 rounded-t-xl">
-                    <h3 className="text-white font-bold flex items-center"><FileJson size={18} className="mr-2 text-cyan-400"/> 参数预览 (JSON)</h3>
-                    <button onClick={onClose} className="text-slate-400 hover:text-white"><X size={20} /></button>
-                </div>
-                <div className="p-4 max-h-[500px] overflow-y-auto custom-scrollbar">
-                    <pre className="text-xs font-mono text-emerald-400 bg-slate-950 p-4 rounded border border-slate-800 overflow-x-auto">
-                        {JSON.stringify(config, null, 2)}
-                    </pre>
-                </div>
-                <div className="p-4 border-t border-slate-700 flex justify-end">
-                     <button onClick={onClose} className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold rounded">关闭</button>
-                </div>
-            </div>
-        </div>
-    );
-};
-
 const SaveToWeightsModal: React.FC<{
   isOpen: boolean;
   onClose: () => void;
@@ -443,6 +421,8 @@ const TrainingMonitor: React.FC = () => {
 
   // Modals & Action State
   const [showConfigModal, setShowConfigModal] = useState(false);
+  const [configDetail, setConfigDetail] = useState<WeightTrainingConfig | null>(null);
+  const [configDetailLoading, setConfigDetailLoading] = useState(false);
   const [deleteModal, setDeleteModal] = useState<{isOpen: boolean, id: number | null, name: string}>({ isOpen: false, id: null, name: '' });
 
   // Action Dropdown State
@@ -1946,9 +1926,20 @@ const TrainingMonitor: React.FC = () => {
                         <h3 className="text-white font-bold text-sm">Configuration Summary</h3>
                         <div className="flex space-x-2">
                             <button
-                                onClick={() => setShowConfigModal(true)}
+                                onClick={async () => {
+                                    setShowConfigModal(true);
+                                    setConfigDetailLoading(true);
+                                    try {
+                                        const detail = await trainingService.getTrainingConfigDetail(exp.id);
+                                        setConfigDetail(detail);
+                                    } catch (error) {
+                                        console.error('获取训练配置详情失败:', error);
+                                    } finally {
+                                        setConfigDetailLoading(false);
+                                    }
+                                }}
                                 className="p-1.5 text-slate-400 hover:text-cyan-400 hover:bg-slate-800 rounded transition-colors"
-                                title="预览参数 JSON"
+                                title="查看完整配置"
                             >
                                 <Eye size={16} />
                             </button>
@@ -2001,7 +1992,13 @@ const TrainingMonitor: React.FC = () => {
             </div>
 
             {/* Modals */}
-            <ConfigPreviewModal isOpen={showConfigModal} onClose={() => setShowConfigModal(false)} config={exp.config || {}} />
+            <TrainingConfigView
+              isOpen={showConfigModal}
+              onClose={() => setShowConfigModal(false)}
+              title="训练配置详情"
+              config={configDetail}
+              loading={configDetailLoading}
+            />
             <SaveToWeightsModal
               isOpen={saveWeightsModal.isOpen}
               onClose={() => setSaveWeightsModal({ isOpen: false, exp: null })}
