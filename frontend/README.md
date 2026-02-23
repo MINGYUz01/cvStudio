@@ -31,13 +31,12 @@ CV Studio 前端是整个平台的用户界面，提供数据集管理、模型�
 
 | 分类 | 技术 |
 |------|------|
-| **框架** | React 19 + TypeScript 5.8 |
-| **构建工具** | Vite 6.2 |
-| **路由** | React Router v7 |
+| **框架** | React 19 + TypeScript |
+| **构建工具** | Vite 6 |
 | **拖拽系统** | @dnd-kit (core, sortable, utilities) |
-| **图表库** | Recharts 3.6 |
-| **图标** | Lucide React 0.562 |
-| **代码高亮** | React Syntax Highlighter 16.1 |
+| **图表库** | Recharts |
+| **图标** | Lucide React |
+| **代码高亮** | React Syntax Highlighter |
 | **HTTP客户端** | Fetch API |
 
 ---
@@ -70,6 +69,14 @@ npm run dev
 - **开发服务器**：http://localhost:3000
 - **后端API**：http://localhost:8000（需单独启动）
 
+### 构建生产版本
+
+```bash
+npm run build
+```
+
+构建产物输出到 `dist/` 目录。
+
 ---
 
 ## 项目结构
@@ -77,25 +84,36 @@ npm run dev
 ```
 frontend/
 ├── src/                              # 源代码目录
-│   ├── main.tsx                      # 应用入口
-│   ├── App.tsx                       # 根组件
-│   ├── index.css                     # 全局样式
-│   ├── types.ts                      # TypeScript类型定义
-│   │
 │   ├── components/                   # 组件目录
-│   │   ├── Dashboard.tsx             # 仪表盘
-│   │   ├── DatasetManager.tsx        # 数据集管理
-│   │   ├── DataAugmentation.tsx      # 数据增强
-│   │   ├── ModelBuilder.tsx          # 模型构建器
-│   │   ├── TrainingMonitor.tsx       # 训练监控
-│   │   ├── InferenceView.tsx         # 推理界面
-│   │   ├── Settings.tsx              # 设置页面
-│   │   ├── Login.tsx                 # 登录页面
-│   │   ├── Sidebar.tsx               # 侧边栏
-│   │   ├── CommandPalette.tsx        # 命令面板
-│   │   ├── GlobalStatusBar.tsx       # 状态栏
-│   │   ├── CodePreviewModal.tsx      # 代码预览
-│   │   └── AuthGuard.tsx             # 路由保护
+│   │   ├── pages/                    # 页面组件
+│   │   │   ├── Dashboard.tsx         # 仪表盘
+│   │   │   ├── DatasetManager.tsx    # 数据集管理
+│   │   │   ├── ModelBuilder.tsx      # 模型构建器
+│   │   │   ├── TrainingMonitor.tsx   # 训练监控
+│   │   │   ├── InferenceView.tsx     # 推理界面
+│   │   │   ├── Settings.tsx          # 设置页面
+│   │   │   └── Login.tsx             # 登录页面
+│   │   ├── layout/                   # 布局组件
+│   │   │   ├── Sidebar.tsx           # 侧边栏
+│   │   │   └── CommandPalette.tsx    # 命令面板
+│   │   └── shared/                   # 共享组件
+│   │       ├── GlobalStatusBar.tsx   # 状态栏
+│   │       ├── WeightTreeSelect.tsx # 权重树选择器
+│   │       ├── DataAugmentation.tsx # 数据增强
+│   │       ├── CodePreviewModal.tsx  # 代码预览
+│   │       ├── TrainingConfigView.tsx # 训练配置
+│   │       ├── TrainingConfigDiffView.tsx # 训练配置对比
+│   │       ├── PaginationControls.tsx # 分页控件
+│   │       ├── AnnotationOverlay.tsx # 标注叠加
+│   │       ├── AuthGuard.tsx        # 路由保护
+│   │       ├── ErrorBoundary.tsx    # 错误边界
+│   │       └── Loading.tsx           # 加载组件
+│   │
+│   ├── hooks/                        # 自定义Hooks
+│   │   ├── useAuth.ts                # 认证Hook
+│   │   ├── useDataset.ts             # 数据集Hook
+│   │   ├── useTraining.ts            # 训练Hook
+│   │   └── useWebSocket.ts           # WebSocket Hook
 │   │
 │   ├── services/                     # API服务层
 │   │   ├── api.ts                    # API客户端封装
@@ -107,25 +125,17 @@ frontend/
 │   │   ├── weights.ts                # 权重库服务
 │   │   └── augmentation.ts           # 数据增强服务
 │   │
-│   ├── hooks/                        # 自定义Hooks
-│   │   ├── useAuth.ts                # 认证Hook
-│   │   ├── useDataset.ts             # 数据集Hook
-│   │   ├── useTraining.ts            # 训练Hook
-│   │   └── useWebSocket.ts           # WebSocket Hook
-│   │
-│   ├── lib/                          # 工具库
-│   │   ├── constants.ts              # 常量定义
-│   │   └── utils.ts                  # 工具函数
-│   │
-│   └── styles/                       # 样式文件
-│       ├── variables.css             # CSS变量
-│       └── global.css                # 全局样式
+│   ├── App.tsx                       # 根组件
+│   ├── types.ts                      # TypeScript类型定义
+│   ├── index.css                     # 全局样式
+│   └── main.tsx                      # 应用入口（Vite）
 │
 ├── public/                           # 静态资源
-│   ├── favicon.ico                   # 网站图标
-│   └── assets/                       # 资源文件
+│   ├── favicon.ico                    # 网站图标
+│   └── assets/                        # 资源文件
 │
 ├── index.html                        # HTML模板
+├── index.tsx                         # Vite入口文件
 ├── vite.config.ts                    # Vite配置
 ├── tsconfig.json                     # TypeScript配置
 ├── package.json                      # 依赖配置
@@ -141,14 +151,13 @@ frontend/
 
 - 系统概览卡片：显示训练任务数、数据集数、模型数
 - 资源监控图表：CPU、内存、GPU使用率
-- 日志查看器：后端/前端日志
 - 快速访问卡片
 
 ### DatasetManager（数据集管理）
 
 - 数据集列表：搜索、过滤、分页
 - 图像画廊：缩略图预览
-- Lightbox：大图查看、缩放、拖拽
+- Lightbox：大图查看、缩放
 - 数据集详情：样本数、类别、格式、大小
 
 ### DataAugmentation（数据增强）
@@ -165,7 +174,7 @@ frontend/
 - 连线系统：贝塞尔曲线
 - 自动布局：拓扑排序
 - 代码生成：PyTorch代码导出
-- 权重库：权重文件管理
+- 权重集成：关联权重库
 
 ### TrainingMonitor（训练监控）
 
@@ -174,13 +183,18 @@ frontend/
 - 训练控制：开始、暂停、停止
 - 实时图表：Loss、Accuracy、学习率
 - 日志查看：实时训练日志
+- Checkpoint管理：检查点保存与恢复
+- 权重继承：支持从预训练权重继续训练
 
 ### InferenceView（推理界面）
 
-- 图像上传：单图/批量
-- 模型选择
-- 结果展示：边界框、标签、置信度
-- 性能测试：FPS测试
+- 单图推理：上传图片选择权重执行推理
+- 批量推理：批量图片推理
+- 权重选择：树形选择器，支持版本管理
+- 结果展示：
+  - 分类任务：条形图显示类别概率
+  - 检测任务：边界框、标签、置信度
+- 结果下载：JSON、标注图片
 
 ---
 
@@ -189,7 +203,6 @@ frontend/
 | 变量名 | 默认值 | 说明 |
 |--------|--------|------|
 | `VITE_API_BASE_URL` | `http://localhost:8000/api/v1` | 后端API地址 |
-| `VITE_WS_BASE_URL` | `ws://localhost:8000/api/v1/ws` | WebSocket地址 |
 
 ---
 
@@ -199,13 +212,18 @@ frontend/
 
 - 使用 **TypeScript** 进行类型检查
 - 使用 **函数式组件** + Hooks
-- 使用 **CSS模块** 或 **CSS-in-JS**
 - 遵循 **单一职责原则**
+
+### 组件命名规范
+
+- 页面组件：`src/components/pages/`
+- 布局组件：`src/components/layout/`
+- 共享组件：`src/components/shared/`
 
 ### 创建新组件
 
 ```tsx
-// src/components/MyComponent.tsx
+// src/components/shared/MyComponent.tsx
 import React from 'react';
 
 interface MyComponentProps {
@@ -259,40 +277,6 @@ export const useMyHook = (id: string) => {
 
 ---
 
-## 构建与部署
-
-### 开发环境
-
-```bash
-npm run dev
-```
-
-### 生产构建
-
-```bash
-npm run build
-```
-
-构建产物输出到 `dist/` 目录。
-
-### 预览生产构建
-
-```bash
-npm run preview
-```
-
-### Docker部署
-
-```bash
-# 构建镜像
-docker build -t cvstudio-frontend .
-
-# 运行容器
-docker run -d -p 3000:80 cvstudio-frontend
-```
-
----
-
 ## 路由配置
 
 | 路径 | 组件 | 说明 |
@@ -308,6 +292,14 @@ docker run -d -p 3000:80 cvstudio-frontend
 
 ---
 
+## 快捷键
+
+| 快捷键 | 功能 |
+|--------|------|
+| `Ctrl + K` | 打开命令面板 |
+
+---
+
 ## 常见问题
 
 ### 1. 如何连接到后端API？
@@ -320,13 +312,13 @@ docker run -d -p 3000:80 cvstudio-frontend
 
 ### 3. 如何添加新的页面组件？
 
-1. 在 `src/components/` 中创建组件
-2. 在 `App.tsx` 中添加路由
+1. 在 `src/components/pages/` 中创建组件
+2. 在 `App.tsx` 中添加路由处理
 3. 在 `Sidebar.tsx` 中添加导航项
 
 ### 4. 样式没有生效？
 
-确保CSS文件正确导入，检查CSS模块配置。
+确保CSS文件正确导入，检查Tailwind CSS类名。
 
 ---
 
@@ -335,13 +327,14 @@ docker run -d -p 3000:80 cvstudio-frontend
 ### 颜色系统
 
 ```css
---color-primary: #3b82f6;
---color-success: #10b981;
---color-warning: #f59e0b;
---color-danger: #ef4444;
---color-bg: #0f172a;
---color-bg-elevated: #1e293b;
---color-border: #334155;
+--color-primary: #22d3ee;    /* cyan-400 */
+--color-secondary: #a855f7;  /* purple-500 */
+--color-success: #10b981;     /* emerald-500 */
+--color-warning: #f59e0b;     /* amber-500 */
+--color-danger: #ef4444;      /* red-500 */
+--color-bg: #0f172a;          /* slate-950 */
+--color-bg-elevated: #1e293b; /* slate-800 */
+--color-border: #334155;      /* slate-700 */
 ```
 
 ### 间距系统
@@ -353,24 +346,6 @@ docker run -d -p 3000:80 cvstudio-frontend
 --spacing-lg: 1.5rem;
 --spacing-xl: 2rem;
 ```
-
-### 圆角系统
-
-```css
---radius-sm: 0.25rem;
---radius-md: 0.5rem;
---radius-lg: 0.75rem;
---radius-full: 9999px;
-```
-
----
-
-## 快捷键
-
-| 快捷键 | 功能 |
-|--------|------|
-| `Ctrl + K` | 打开命令面板 |
-| `Ctrl + B` | 切换侧边栏 |
 
 ---
 
@@ -397,4 +372,4 @@ MIT License
 
 ---
 
-**最后更新时间**：2026-01-15
+**最后更新时间**：2026-02-23

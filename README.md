@@ -11,7 +11,7 @@
 
 ## 项目简介
 
-CV Studio 是一个面向深度学习计算机视觉任务的一站式管理平台，提供从**数据集管理 → 模型构建 → 训练管理 → 推理预览**的完整工作流。平台采用现代化的技术栈，具有易扩展、易演示的特点，非常适合毕业设计答辩和后续功能扩展。
+CV Studio 是一个面向深度学习计算机视觉任务的一站式管理平台，提供从**数据集管理 → 模型构建 → 训练管理 → 推理预览**的完整工作流。平台采用现代化的技术栈，具有易扩展、易演示的特点。
 
 ### 核心功能
 
@@ -20,16 +20,16 @@ CV Studio 是一个面向深度学习计算机视觉任务的一站式管理平�
 | **数据集管理** | 自动识别YOLO/COCO/VOC/分类格式，在线数据增强与预览 | ✅ 完成 |
 | **模型构建器** | 可视化拖拽构建模型，自动生成PyTorch代码 | ✅ 完成 |
 | **训练管理** | 训练任务调度，实时监控面板，Checkpoint管理 | ✅ 完成 |
-| **推理模块** | 单图/批量推理，性能测试（FPS） | ✅ 完成 |
-| **用户系统** | JWT认证，配置管理，Token刷新 | ✅ 完成 |
-| **权重库** | 权重文件管理，导入导出 | ✅ 完成 |
+| **推理模块** | 单图/批量推理，支持分类与检测任务 | ✅ 完成 |
+| **权重库** | 权重文件版本管理，关联训练任务 | ✅ 完成 |
+| **用户系统** | JWT认证，配置管理 | ✅ 完成 |
 
 ---
 
 ## 技术栈
 
 ### 后端
-- **框架**：FastAPI 0.104
+- **框架**：FastAPI
 - **数据库**：SQLite + SQLAlchemy 2.0
 - **认证**：JWT (python-jose)
 - **任务队列**：Celery + Redis
@@ -41,7 +41,6 @@ CV Studio 是一个面向深度学习计算机视觉任务的一站式管理平�
 - **构建工具**：Vite 6
 - **UI组件**：Lucide Icons + Recharts
 - **拖拽系统**：@dnd-kit
-- **路由**：React Router v7
 - **代码高亮**：React Syntax Highlighter
 
 ---
@@ -55,25 +54,7 @@ CV Studio 是一个面向深度学习计算机视觉任务的一站式管理平�
 - **Redis**：5.0+（用于Celery任务队列）
 - **操作系统**：Windows 10/11、macOS、Linux
 
-### 方式一：使用Docker Compose（推荐）
-
-```bash
-# 克隆项目
-git clone https://github.com/MINGYUz01/cvStudio.git
-cd cvStudio
-
-# 启动所有服务
-docker-compose up -d
-
-# 访问应用
-# 前端：http://localhost:3000
-# 后端API：http://localhost:8000
-# API文档：http://localhost:8000/api/v1/docs
-```
-
-### 方式二：手动安装
-
-#### 1. 后端安装
+### 后端安装
 
 ```bash
 # 进入后端目录
@@ -89,11 +70,18 @@ pip install -r requirements.txt
 # 复制环境变量文件
 cp .env.example .env
 
+# 启动Redis（Docker方式，在另一个终端）
+docker run -d -p 6379:6379 redis:latest
+
+# 启动Celery Worker（在另一个终端）
+cd backend
+python -m celery -A celery_app worker --loglevel=info --pool=solo
+
 # 启动后端服务
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-#### 2. 前端安装
+### 前端安装
 
 ```bash
 # 新开一个终端，进入前端目录
@@ -109,18 +97,14 @@ cp .env.example .env.local
 npm run dev
 ```
 
-#### 3. 启动Celery Worker（训练任务需要）
+### 访问应用
 
-```bash
-# 新开一个终端，进入后端目录
-cd backend
-
-# 启动Redis（Docker方式）
-docker run -d -p 6379:6379 redis:latest
-
-# 启动Celery Worker
-python -m celery -A celery_app worker --loglevel=info --pool=solo
-```
+| 服务 | 地址 |
+|------|------|
+| **前端应用** | http://localhost:3000 |
+| **后端API** | http://localhost:8000 |
+| **API文档（Swagger）** | http://localhost:8000/api/v1/docs |
+| **API文档（ReDoc）** | http://localhost:8000/api/v1/redoc |
 
 ### 默认账户
 
@@ -147,39 +131,78 @@ cvStudio/
 │   │   │   │   ├── weights.py        # 权重库API
 │   │   │   │   └── websocket.py      # WebSocket
 │   │   ├── core/                     # 核心功能
-│   │   ├── models/                   # 数据模型
+│   │   ├── models/                   # 数据模型（SQLAlchemy）
 │   │   ├── schemas/                  # Pydantic模式
 │   │   ├── services/                 # 业务逻辑
 │   │   ├── utils/                    # 工具函数
 │   │   ├── tasks/                    # Celery任务
 │   │   └── main.py                   # 应用入口
+│   ├── data/                         # 数据目录（统一）
+│   │   ├── datasets/                 # 数据集存储
+│   │   ├── models/                   # 生成的模型
+│   │   ├── checkpoints/              # 训练检查点
+│   │   ├── experiments/              # 实验数据
+│   │   ├── weights/                  # 权重库
+│   │   ├── uploads/                  # 上传文件
+│   │   ├── architectures/            # 模型架构
+│   │   ├── thumbnails/               # 缩略图
+│   │   └── temp/                     # 临时文件
 │   ├── tests/                        # 测试目录
+│   ├── alembic/                      # 数据库迁移
 │   ├── requirements.txt              # Python依赖
+│   ├── run.py                        # 启动脚本
 │   └── .env.example                  # 环境变量模板
 │
 ├── frontend/                         # 前端代码
 │   ├── src/
 │   │   ├── components/               # React组件
-│   │   ├── pages/                    # 页面组件
-│   │   ├── services/                 # API服务
+│   │   │   ├── pages/                # 页面组件
+│   │   │   │   ├── Dashboard.tsx     # 仪表盘
+│   │   │   │   ├── DatasetManager.tsx # 数据集管理
+│   │   │   │   ├── ModelBuilder.tsx  # 模型构建器
+│   │   │   │   ├── TrainingMonitor.tsx # 训练监控
+│   │   │   │   ├── InferenceView.tsx # 推理界面
+│   │   │   │   ├── Settings.tsx      # 设置页面
+│   │   │   │   └── Login.tsx         # 登录页面
+│   │   │   ├── layout/               # 布局组件
+│   │   │   │   ├── Sidebar.tsx       # 侧边栏
+│   │   │   │   └── CommandPalette.tsx # 命令面板
+│   │   │   └── shared/               # 共享组件
+│   │   │       ├── GlobalStatusBar.tsx    # 状态栏
+│   │   │       ├── WeightTreeSelect.tsx  # 权重选择器
+│   │   │       ├── DataAugmentation.tsx  # 数据增强
+│   │   │       ├── CodePreviewModal.tsx  # 代码预览
+│   │   │       ├── TrainingConfigView.tsx # 训练配置
+│   │   │       └── ...
 │   │   ├── hooks/                    # 自定义Hooks
-│   │   └── main.tsx                  # 应用入口
+│   │   │   ├── useAuth.ts
+│   │   │   ├── useDataset.ts
+│   │   │   ├── useTraining.ts
+│   │   │   └── useWebSocket.ts
+│   │   ├── services/                 # API服务
+│   │   │   ├── api.ts
+│   │   │   ├── auth.ts
+│   │   │   ├── datasets.ts
+│   │   │   ├── models.ts
+│   │   │   ├── training.ts
+│   │   │   ├── inference.ts
+│   │   │   └── weights.ts
+│   │   ├── App.tsx                   # 根组件
+│   │   ├── types.ts                  # TypeScript类型
+│   │   └── index.css                 # 全局样式
+│   ├── index.html                    # HTML模板
+│   ├── index.tsx                     # Vite入口
 │   ├── package.json                  # Node依赖
+│   ├── vite.config.ts                # Vite配置
 │   └── .env.example                  # 环境变量模板
 │
-├── data/                             # 数据目录
-│   ├── datasets/                     # 数据集存储
-│   ├── models/                       # 模型存储
-│   ├── checkpoints/                  # 训练检查点
-│   └── weights/                      # 权重库
-│
 ├── docs/                             # 文档目录
-│   ├── 开发周期.md                   # 开发计划
-│   ├── 项目完善计划.md               # 完善计划
-│   └── design/                       # 设计文档
+│   ├── 开发周期.md                    # 开发计划
+│   ├── api/                           # API文档
+│   └── design/                        # 设计文档
 │
-├── docker-compose.yml                # Docker编排（待完善）
-├── .env.example                      # 环境变量示例
+├── logs/                             # 日志目录
+├── CLAUDE.md                         # 开发者配置
 └── README.md                         # 本文件
 ```
 
@@ -209,17 +232,19 @@ cvStudio/
 
 ### 推理模块
 - 单图/批量推理
+- 权重树形选择（支持版本管理）
 - 结果可视化：边界框、标签、置信度
 - 性能测试：FPS测试、推理时间分析
+
+### 权重库
+- 权重文件管理
+- 版本管理（父子关系）
+- 关联训练任务
+- 导入/导出权重
 
 ---
 
 ## API文档
-
-启动后端服务后，可以通过以下地址查看API文档：
-
-- **Swagger UI**：http://localhost:8000/api/v1/docs
-- **ReDoc**：http://localhost:8000/api/v1/redoc
 
 ### 主要API端点
 
@@ -233,8 +258,8 @@ cvStudio/
 | 模型 | `POST /api/v1/models/generate` | 生成PyTorch代码 |
 | 训练 | `POST /api/v1/training/start` | 启动训练 |
 | 训练 | `POST /api/v1/training/{id}/control` | 控制训练 |
-| 推理 | `POST /api/v1/inference/predict` | 执行推理 |
-| WebSocket | `ws://localhost:8000/api/v1/ws/system` | 系统状态流 |
+| 推理 | `POST /api/v1/inference/predict-image` | 图片上传+推理 |
+| 权重 | `GET /api/v1/weights/tree` | 获取权重树 |
 | WebSocket | `ws://localhost:8000/api/v1/ws/training/{id}` | 训练日志流 |
 
 ---
@@ -272,23 +297,6 @@ chore: 构建/工具变动
 
 ---
 
-## 部署
-
-### 生产环境配置
-
-1. 修改环境变量配置文件
-2. 构建前端生产版本：`cd frontend && npm run build`
-3. 使用Docker Compose部署：`docker-compose up -d`
-
-### 性能优化建议
-
-- 使用Nginx作为反向代理
-- 启用Gzip压缩
-- 配置静态文件CDN
-- 使用多GPU训练（如需要）
-
----
-
 ## 常见问题
 
 ### 1. 训练任务无法启动？
@@ -300,11 +308,14 @@ chore: 构建/工具变动
 ### 3. 数据集上传失败？
 检查文件大小限制，修改后端 `.env` 中的 `MAX_UPLOAD_SIZE` 配置。
 
+### 4. 推理失败？
+确保权重文件正确上传，模型架构与权重匹配。
+
 ---
 
 ## 更新日志
 
-### v1.0.0（开发中）
+### v1.0.0（2026-02）
 - ✅ 数据集管理模块
 - ✅ 模型构建器与代码生成
 - ✅ 训练任务调度系统
@@ -312,8 +323,7 @@ chore: 构建/工具变动
 - ✅ 用户认证与配置管理
 - ✅ 权重库管理
 - ✅ 推理模块
-- 🔄 Docker部署配置
-- 🔄 完善文档与测试
+- ✅ 目录结构重构
 
 ---
 
@@ -353,5 +363,5 @@ chore: 构建/工具变动
 
 ---
 
-**最后更新时间**：2026-01-15
+**最后更新时间**：2026-02-23
 **文档版本**：v1.0

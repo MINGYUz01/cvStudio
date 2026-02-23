@@ -7,12 +7,12 @@ import {
   Database, HardDrive, Download, Upload, Tag,
   Loader2, FileText, FolderOpen, ChevronLeft, ChevronRight, ChevronDown, Settings
 } from 'lucide-react';
-import { ModelNode, WeightCheckpoint, WeightTreeItem } from '../types';
-import modelsAPI from '../src/services/models';
-import { weightService, TaskType, WeightTrainingConfig } from '../src/services/weights';
+import { ModelNode, WeightCheckpoint, WeightTreeItem } from '../../types';
+import modelsAPI from '../../services/models';
+import { weightService, TaskType, WeightTrainingConfig } from '../../services/weights';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from 'recharts';
-import CodePreviewModal from './CodePreviewModal';
-import TrainingConfigView from './TrainingConfigView';
+import CodePreviewModal from '../shared/CodePreviewModal';
+import TrainingConfigView from '../shared/TrainingConfigView';
 
 // 统计图表颜色
 const CHART_COLORS = ['#22d3ee', '#a855f7', '#f43f5e', '#fbbf24', '#34d399', '#60a5fa'];

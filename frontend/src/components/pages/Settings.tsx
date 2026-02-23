@@ -15,8 +15,8 @@ import {
   LayoutTemplate,
   Loader2
 } from 'lucide-react';
-import { useAuth } from '../src/hooks/useAuth';
-import type { UserConfig } from '../src/services/auth';
+import { useAuth } from '../../hooks/useAuth';
+import type { UserConfig } from '../../services/auth';
 
 interface SettingsProps {
   onLogout: () => void;

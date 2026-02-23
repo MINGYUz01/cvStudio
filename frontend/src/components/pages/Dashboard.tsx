@@ -30,7 +30,7 @@ import {
   Tooltip, 
   ResponsiveContainer 
 } from 'recharts';
-import { MetricCardProps, ViewState } from '../types';
+import { MetricCardProps, ViewState } from '../../types';
 
 // Add prop interface
 interface DashboardProps {

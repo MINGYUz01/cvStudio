@@ -5,7 +5,7 @@ import {
   Zap, Shield, Globe, Smartphone, Cloud, Search, Command,
   Layers, GitBranch, Box, HardDrive, Key
 } from 'lucide-react';
-import { useAuth } from '../src/hooks/useAuth';
+import { useAuth } from '../../hooks/useAuth';
 
 interface LoginProps {
   onLogin?: () => void;

@@ -35,14 +35,14 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "DEBUG"
     LOG_FILE: str = "./logs/app.log"
     
-    # 文件存储配置
-    UPLOAD_DIR: str = "../data/uploads"
-    DATASETS_DIR: str = "../data/datasets"
-    DATASET_STORAGE_PATH: str = "../data/datasets"
-    THUMBNAIL_STORAGE_PATH: str = "../data/thumbnails"
-    MODELS_DIR: str = "../data/models"
-    CHECKPOINTS_DIR: str = "../data/checkpoints"
-    TEMP_DIR: str = "../data/temp"
+    # 文件存储配置（统一使用 backend/data/ 目录）
+    UPLOAD_DIR: str = "./data/uploads"
+    DATASETS_DIR: str = "./data/datasets"
+    DATASET_STORAGE_PATH: str = "./data/datasets"
+    THUMBNAIL_STORAGE_PATH: str = "./data/thumbnails"
+    MODELS_DIR: str = "./data/models"
+    CHECKPOINTS_DIR: str = "./data/checkpoints"
+    TEMP_DIR: str = "./data/temp"
     MAX_UPLOAD_SIZE: int = 1073741824  # 1GB
     
     # 训练配置

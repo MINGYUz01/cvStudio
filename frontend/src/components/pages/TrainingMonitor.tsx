@@ -47,21 +47,21 @@ import {
   AreaChart,
   Area
 } from 'recharts';
-import { useTrainingLogsWS, LogEntry, MetricsEntry, StatusChange } from '../hooks/useWebSocket';
+import { useTrainingLogsWS, LogEntry, MetricsEntry, StatusChange } from '../../hooks/useWebSocket';
 import {
   trainingService,
   TrainingRun,
   TrainingStatus,
   MetricsEntry as TrainingMetricsEntry,
   LogEntry as TrainingLogEntry
-} from '../src/services/training';
-import { datasetService, Dataset } from '../src/services/datasets';
-import { getAugmentationStrategies } from '../src/services/augmentation';
-import { weightService, WeightLibraryItem, WeightForTrainingOption, WeightTreeItem, WeightTrainingConfig } from '../src/services/weights';
-import WeightTreeSelect, { WeightTreeSelectOption } from './WeightTreeSelect';
-import TrainingConfigView from './TrainingConfigView';
-import { getPresetModels, type PresetModel } from '../src/services/models';
-import { AugmentationStrategy } from '../types';
+} from '../../services/training';
+import { datasetService, Dataset } from '../../services/datasets';
+import { getAugmentationStrategies } from '../../services/augmentation';
+import { weightService, WeightLibraryItem, WeightForTrainingOption, WeightTreeItem, WeightTrainingConfig } from '../../services/weights';
+import WeightTreeSelect, { WeightTreeSelectOption } from '../shared/WeightTreeSelect';
+import TrainingConfigView from '../shared/TrainingConfigView';
+import { getPresetModels, type PresetModel } from '../../services/models';
+import { AugmentationStrategy } from '../../types';
 
 // --- Types ---
 

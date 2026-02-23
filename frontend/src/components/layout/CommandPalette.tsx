@@ -16,7 +16,7 @@ import {
   Sun,
   Laptop
 } from 'lucide-react';
-import { ViewState } from '../types';
+import { ViewState } from '../../types';
 
 interface CommandPaletteProps {
   isOpen: boolean;

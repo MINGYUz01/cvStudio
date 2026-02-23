@@ -51,16 +51,16 @@ import {
   updateAugmentationStrategy,
   deleteAugmentationStrategy,
   previewAugmentation
-} from '../src/services/augmentation';
+} from '../../services/augmentation';
 
-import { datasetService } from '../src/services/datasets';
+import { datasetService } from '../../services/datasets';
 
 import type {
   AugmentationOperator,
   AugmentationStrategy,
   PipelineItem,
   DatasetItem
-} from '../types';
+} from '../../types';
 
 type ParamType = 'range' | 'number' | 'boolean' | 'select' | 'tuple' | 'float_range' | 'int_range';
 

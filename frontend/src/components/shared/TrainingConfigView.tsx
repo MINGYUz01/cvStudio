@@ -15,7 +15,7 @@ import {
   X, Settings, Database, Cpu, Activity,
   Layers, Box, GitBranch, CheckCircle, XCircle
 } from 'lucide-react';
-import { WeightTrainingConfig, DatasetInfo, ModelArchitectureInfo } from '../src/services/weights';
+import { WeightTrainingConfig, DatasetInfo, ModelArchitectureInfo } from '../../services/weights';
 
 // 算子ID到中文名称的映射（与后端 augmentation_registry.py 保持一致）
 const OPERATOR_NAMES: Record<string, string> = {

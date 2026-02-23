@@ -780,15 +780,9 @@ class TrainingService:
             if task_type not in ["classification", "detection"]:
                 task_type = "classification"
 
-            # 获取checkpoint目录 - 支持多个可能的路径
+            # 获取checkpoint目录 - 统一使用 data/experiments/ 路径
             experiment_dir_rel = training_run.experiment_dir or f"data/experiments/exp_{training_run_id}"
             experiment_dir = Path(experiment_dir_rel)
-
-            # 如果相对路径不存在，尝试从backend目录查找
-            if not experiment_dir.exists():
-                backend_exp_dir = Path("backend/data/experiments") / f"exp_{training_run_id}"
-                if backend_exp_dir.exists():
-                    experiment_dir = backend_exp_dir
 
             checkpoints_dir = experiment_dir / "checkpoints"
 

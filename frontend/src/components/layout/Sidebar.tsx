@@ -13,7 +13,7 @@ import {
   ChevronRight,
   Search
 } from 'lucide-react';
-import { ViewState } from '../types';
+import { ViewState } from '../../types';
 
 interface SidebarProps {
   activeView: ViewState;

@@ -28,14 +28,14 @@ import {
   Info,
   Tags
 } from 'lucide-react';
-import { DatasetItem } from '../types';
-import { useDataset } from '../src/hooks/useDataset';
-import { adaptDatasetList, DatasetFormatStatus } from '../src/services/datasetAdapter';
-import { datasetService, ImageInfo } from '../src/services/datasets';
-import { apiClient } from '../src/services/api';
-import DatasetStatusLegend from './DatasetStatusLegend';
-import AnnotationOverlay from './AnnotationOverlay';
-import PaginationControls, { PageSizeOption } from './PaginationControls';
+import { DatasetItem } from '../../types';
+import { useDataset } from '../../hooks/useDataset';
+import { adaptDatasetList, DatasetFormatStatus } from '../../services/datasetAdapter';
+import { datasetService, ImageInfo } from '../../services/datasets';
+import { apiClient } from '../../services/api';
+import DatasetStatusLegend from '../shared/DatasetStatusLegend';
+import AnnotationOverlay from '../shared/AnnotationOverlay';
+import PaginationControls, { PageSizeOption } from '../shared/PaginationControls';
 
 // --- Import Dataset Dialog Component ---
 interface ImportDatasetDialogProps {

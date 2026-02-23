@@ -1,15 +1,15 @@
 import React, { useState, useEffect } from 'react';
-import Sidebar from './components/Sidebar';
-import Dashboard from './components/Dashboard';
-import DatasetManager from './components/DatasetManager';
-import DataAugmentation from './components/DataAugmentation';
-import ModelBuilder from './components/ModelBuilder';
-import TrainingMonitor from './components/TrainingMonitor';
-import InferenceView from './components/InferenceView';
-import Settings from './components/Settings';
-import Login from './components/Login';
-import CommandPalette from './components/CommandPalette';
-import GlobalStatusBar from './components/GlobalStatusBar';
+import Sidebar from './components/layout/Sidebar';
+import Dashboard from './components/pages/Dashboard';
+import DatasetManager from './components/pages/DatasetManager';
+import DataAugmentation from './components/shared/DataAugmentation';
+import ModelBuilder from './components/pages/ModelBuilder';
+import TrainingMonitor from './components/pages/TrainingMonitor';
+import InferenceView from './components/pages/InferenceView';
+import Settings from './components/pages/Settings';
+import Login from './components/pages/Login';
+import CommandPalette from './components/layout/CommandPalette';
+import GlobalStatusBar from './components/shared/GlobalStatusBar';
 import { ViewState } from './types';
 
 const ACTIVE_VIEW_KEY = 'active_view';

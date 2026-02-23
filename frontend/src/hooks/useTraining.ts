@@ -13,7 +13,7 @@ import {
   MetricsEntry,
   LogEntry,
 } from '../services/training';
-import { useTrainingLogsWS, MetricsEntry as WSMetricsEntry, LogEntry as WSLogEntry } from '../../hooks/useWebSocket';
+import { useTrainingLogsWS, MetricsEntry as WSMetricsEntry, LogEntry as WSLogEntry } from './useWebSocket';
 
 /**
  * Hook返回值接口

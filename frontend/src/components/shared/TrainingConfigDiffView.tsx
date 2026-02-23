@@ -6,7 +6,7 @@
 
 import React, { useMemo } from 'react';
 import { ArrowRight, TrendingUp, TrendingDown, Minus } from 'lucide-react';
-import { WeightTreeItem, WeightTrainingConfig, ConfigDiffItem } from '../types';
+import { WeightTreeItem, WeightTrainingConfig, ConfigDiffItem } from '../../types';
 
 interface TrainingConfigDiffViewProps {
   parentWeight: WeightTreeItem | null;

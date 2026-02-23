@@ -29,8 +29,8 @@ import {
 } from 'lucide-react';
 
 // 导入推理服务和权重树选择器
-import { inferenceService, WeightLibrary, InferencePredictResponse, InferenceResult, WeightTreeSelectOption } from '../src/services/inference';
-import WeightTreeSelect from './WeightTreeSelect';
+import { inferenceService, WeightLibrary, InferencePredictResponse, InferenceResult, WeightTreeSelectOption } from '../../services/inference';
+import WeightTreeSelect from '../shared/WeightTreeSelect';
 
 // ==================== 持久化存储工具 ====================
 
