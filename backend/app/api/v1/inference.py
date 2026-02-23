@@ -4,7 +4,7 @@
 """
 
 from pathlib import Path
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from sqlalchemy.orm import Session
 from typing import Dict, Any, List, Optional
 from loguru import logger
@@ -12,6 +12,7 @@ from loguru import logger
 from app.database import get_db
 from app.models.inference import InferenceJob
 from app.models.weight_library import WeightLibrary
+from app.models.generated_code import GeneratedCode
 from app.schemas.inference import (
     InferencePredictRequest,
     InferencePredictResponse,
@@ -600,12 +601,12 @@ async def download_inference_results(
     description="上传图片并直接返回推理结果"
 )
 async def predict_image_inference(
-    weight_id: int,
+    weight_id: int = Form(...),
     image: UploadFile = File(...),
-    confidence_threshold: float = 0.5,
-    iou_threshold: float = 0.45,
-    top_k: int = 5,
-    device: Optional[str] = None,
+    confidence_threshold: float = Form(0.5),
+    iou_threshold: float = Form(0.45),
+    top_k: int = Form(5),
+    device: Optional[str] = Form(None),
     db: Session = Depends(get_db)
 ) -> InferencePredictResponse:
     """
@@ -623,8 +624,23 @@ async def predict_image_inference(
     try:
         logger.bind(component="inference_api").info(
             f"收到图片推理请求: weight_id={weight_id}, "
-            f"image={image.filename}"
+            f"image={image.filename if image else 'None'}, "
+            f"confidence_threshold={confidence_threshold}"
         )
+
+        # 验证 weight_id
+        if not weight_id or weight_id <= 0:
+            raise HTTPException(
+                status_code=422,
+                detail="weight_id 必须是有效的正整数"
+            )
+
+        # 验证图片文件
+        if not image or not image.filename:
+            raise HTTPException(
+                status_code=422,
+                detail="图片文件不能为空"
+            )
 
         # 从权重库查询权重信息
         weight = db.query(WeightLibrary).filter(
@@ -659,14 +675,96 @@ async def predict_image_inference(
             import shutil
             shutil.copyfileobj(image.file, buffer)
 
-        # 获取模型加载器
-        loader = get_model_loader()
+        # 加载模型
+        import torch
+        from app.utils.models.factory import ModelFactory
 
-        # 使用权重路径加载模型
-        model_data = loader.load_model(
-            str(weight_path),
-            device=device
-        )
+        # 确定类别数
+        num_classes = len(weight.class_names) if weight.class_names else 10
+
+        # 如果权重有关联的生成代码，使用 ModelFactory 加载模型
+        if weight.generated_code_id:
+            generated_code = db.query(GeneratedCode).filter(
+                GeneratedCode.id == weight.generated_code_id
+            ).first()
+
+            if not generated_code:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"生成的代码不存在: generated_code_id={weight.generated_code_id}"
+                )
+
+            # 检查代码文件是否存在
+            code_file_path = Path(generated_code.file_path)
+            if not code_file_path.exists():
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"生成的代码文件不存在: {generated_code.file_path}"
+                )
+
+            # 使用 ModelFactory 动态加载模型
+            architecture_config = {
+                "code_path": str(code_file_path),
+                "model_class_name": getattr(generated_code, 'meta', {}).get('model_class_name', 'GeneratedModel')
+            }
+
+            try:
+                model = ModelFactory._load_generated_model(architecture_config, num_classes)
+            except Exception as e:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"加载生成的模型失败: {str(e)}"
+                )
+
+            # 加载权重 state_dict
+            checkpoint = torch.load(str(weight_path), map_location='cpu', weights_only=False)
+
+            # 提取 model_state_dict
+            if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
+                state_dict = checkpoint['model_state_dict']
+            elif isinstance(checkpoint, dict) and 'state_dict' in checkpoint:
+                state_dict = checkpoint['state_dict']
+            elif isinstance(checkpoint, dict) and 'model' in checkpoint:
+                state_dict = checkpoint['model']
+            else:
+                # checkpoint 可能本身就是 state_dict
+                state_dict = checkpoint
+
+            # 加载 state_dict 到模型
+            try:
+                model.load_state_dict(state_dict, strict=True)
+            except Exception as e:
+                # 尝试非严格模式
+                try:
+                    model.load_state_dict(state_dict, strict=False)
+                except Exception as e2:
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"加载权重参数失败: {str(e)}, 非严格模式也失败: {str(e2)}"
+                    )
+
+            # 确定设备
+            if device and device != 'auto':
+                target_device = device
+            else:
+                target_device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
+
+            model = model.to(target_device)
+            model.eval()
+
+            model_data = {
+                'model': model,
+                'type': 'pytorch',
+                'device': target_device
+            }
+
+        else:
+            # 没有关联的生成代码，尝试直接加载（适用于 ONNX 或完整模型）
+            loader = get_model_loader()
+            model_data = loader.load_model(
+                str(weight_path),
+                device=device
+            )
 
         # 准备配置参数
         config = {

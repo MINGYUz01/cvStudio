@@ -138,8 +138,9 @@ class ModelLoader:
         logger.bind(component="model_loader").debug(f"加载PyTorch模型: {model_path}")
 
         try:
-            # 加载模型checkpoint
-            checkpoint = torch.load(model_path, map_location=device)
+            # 先加载到CPU避免设备映射问题（特别是"tagged with auto"错误）
+            # 然后再移动到目标设备
+            checkpoint = torch.load(model_path, map_location='cpu')
 
             # 尝试不同的checkpoint结构
             if isinstance(checkpoint, dict):

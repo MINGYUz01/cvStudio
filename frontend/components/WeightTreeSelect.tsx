@@ -107,9 +107,6 @@ const TreeNode: React.FC<TreeNodeProps> = ({
         {/* 权重名称 */}
         <span className="text-sm truncate">{node.display_name}</span>
 
-        {/* 版本标签 */}
-        <span className="ml-2 text-xs text-slate-500">v{node.version}</span>
-
         {/* 配置查看按钮 - 仅训练生成的权重显示 */}
         {node.source_type === 'trained' && onViewConfig && (
           <button
@@ -225,9 +222,6 @@ const WeightTreeSelect: React.FC<WeightTreeSelectProps> = ({
                 }`}
               />
               <span className="text-sm truncate">{selectedOption.display_name}</span>
-              <span className="text-xs text-slate-500 flex-shrink-0">
-                v{selectedOption.version}
-              </span>
               {/* 训练配置查看按钮 - 在权重名称旁边显示 */}
               {selectedOption.source_type === 'trained' && onViewConfig && (
                 <button

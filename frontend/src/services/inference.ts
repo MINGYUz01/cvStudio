@@ -49,6 +49,19 @@ export interface WeightLibrary {
 }
 
 /**
+ * 权重树形选择器选项
+ */
+export interface WeightTreeSelectOption {
+  id: number;
+  name: string;
+  display_name: string;
+  version: string;
+  source_type: 'uploaded' | 'trained';
+  is_root: boolean;
+  children?: WeightTreeSelectOption[];
+}
+
+/**
  * 权重库创建请求
  */
 export interface WeightLibraryCreate {
@@ -198,18 +211,26 @@ class InferenceServiceClass {
    * @returns 权重列表
    */
   async getWeights(taskType?: TaskType, isActive: boolean = true): Promise<WeightLibrary[]> {
-    const params: Record<string, string | number | boolean> = {
-      is_active: isActive
-    };
+    const params: Record<string, string | number> = {};
     if (taskType) {
       params.task_type = taskType;
     }
+    params.is_active = isActive ? 'true' : 'false';
 
     // 后端返回格式: { weights: [...], total: number }
     const response = await apiClient.get<{ weights: WeightLibrary[], total: number }>(`${this.weightsUrl}`, { params });
 
     // 从响应中提取权重数组
     return response?.weights || [];
+  }
+
+  /**
+   * 获取权重树形结构
+   * @returns 权重树形结构
+   */
+  async getWeightTree(): Promise<WeightTreeSelectOption[]> {
+    const response = await apiClient.get<WeightTreeSelectOption[]>(`${this.weightsUrl}/tree`);
+    return response || [];
   }
 
   /**
@@ -509,10 +530,31 @@ class InferenceServiceClass {
       formData.append('device', options.device);
     }
 
+    // 调试日志
+    console.log('[predictWithImage] weightId:', weightId, 'file:', file.name, 'options:', options);
+
     const token = localStorage.getItem('access_token');
 
     return new Promise<InferencePredictResponse>((resolve, reject) => {
       const xhr = new XMLHttpRequest();
+
+      // 设置超时时间：5分钟（推理可能需要较长时间）
+      const TIMEOUT_MS = 5 * 60 * 1000;
+      let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+      // 清除超时的辅助函数
+      const clearMyTimeout = () => {
+        if (timeoutId !== null) {
+          window.clearTimeout(timeoutId);
+          timeoutId = null;
+        }
+      };
+
+      // 设置超时
+      timeoutId = setTimeout(() => {
+        xhr.abort();
+        reject(new Error('请求超时，推理时间过长或后端无响应'));
+      }, TIMEOUT_MS);
 
       xhr.upload.addEventListener('progress', (e) => {
         if (e.lengthComputable && onProgress) {
@@ -522,28 +564,45 @@ class InferenceServiceClass {
       });
 
       xhr.addEventListener('load', () => {
+        clearMyTimeout();
         if (xhr.status >= 200 && xhr.status < 300) {
           try {
             const result = JSON.parse(xhr.responseText);
-            resolve(result.data);
+            // 后端直接返回 InferencePredictResponse 对象，不是 { data: {} } 格式
+            resolve(result);
           } catch (e) {
             reject(new Error('解析响应失败'));
           }
         } else {
           try {
             const error = JSON.parse(xhr.responseText);
-            reject(new Error(error.detail || '推理失败'));
+            // 显示更详细的错误信息
+            console.error('[predictWithImage] 错误响应:', xhr.status, error);
+            reject(new Error(error.detail || error.message || '推理失败'));
           } catch {
-            reject(new Error(`推理失败 (${xhr.status})`));
+            console.error('[predictWithImage] 错误响应:', xhr.status, xhr.responseText);
+            reject(new Error(`推理失败 (${xhr.status}): ${xhr.responseText}`));
           }
         }
       });
 
       xhr.addEventListener('error', () => {
-        reject(new Error('网络错误，推理失败'));
+        clearMyTimeout();
+        reject(new Error('网络错误，无法连接到服务器'));
+      });
+
+      xhr.addEventListener('abort', () => {
+        clearMyTimeout();
+        reject(new Error('请求已中断'));
+      });
+
+      xhr.addEventListener('timeout', () => {
+        clearMyTimeout();
+        reject(new Error('请求超时'));
       });
 
       xhr.open('POST', `${apiClient['baseURL']}${this.inferenceUrl}/predict-image`);
+      xhr.timeout = TIMEOUT_MS; // 设置 XHR 原生超时
       xhr.setRequestHeader('Authorization', `Bearer ${token}`);
       xhr.send(formData);
     });

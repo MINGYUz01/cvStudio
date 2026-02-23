@@ -115,7 +115,12 @@ class InferenceExecutor:
         """
         # 调整大小（YOLO默认640x640）
         target_size = self.config.get('target_size', 640)
-        image = image.resize((target_size, target_size), Image.BILINEAR)
+        # 处理target_size可能是列表的情况
+        if isinstance(target_size, (list, tuple)):
+            size = target_size[0] if len(target_size) > 0 else 640
+        else:
+            size = target_size if target_size else 640
+        image = image.resize((size, size), Image.BILINEAR)
 
         # 转换为tensor
         tensor = torch.from_numpy(np.array(image)).permute(2, 0, 1).float() / 255.0
@@ -141,7 +146,12 @@ class InferenceExecutor:
         """
         # 调整大小
         target_size = self.config.get('target_size', 640)
-        image = image.resize((target_size, target_size), Image.BILINEAR)
+        # 处理target_size可能是列表的情况
+        if isinstance(target_size, (list, tuple)):
+            size = target_size[0] if len(target_size) > 0 else 640
+        else:
+            size = target_size if target_size else 640
+        image = image.resize((size, size), Image.BILINEAR)
 
         # 转换为numpy数组
         array = np.array(image).astype(np.float32)

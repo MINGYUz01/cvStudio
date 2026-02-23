@@ -28,8 +28,9 @@ import {
   FlipHorizontal
 } from 'lucide-react';
 
-// 导入推理服务
-import { inferenceService, WeightLibrary, InferencePredictResponse, InferenceResult } from '../src/services/inference';
+// 导入推理服务和权重树选择器
+import { inferenceService, WeightLibrary, InferencePredictResponse, InferenceResult, WeightTreeSelectOption } from '../src/services/inference';
+import WeightTreeSelect from './WeightTreeSelect';
 
 // ==================== 持久化存储工具 ====================
 
@@ -101,8 +102,8 @@ const InferenceView: React.FC = () => {
   const [selectedBatchImage, setSelectedBatchImage] = useState<number | null>(null);
   const [selectedWeightId, setSelectedWeightId] = useState<number | null>(null);
 
-  // 权重列表和加载状态
-  const [availableWeights, setAvailableWeights] = useState<WeightLibrary[]>([]);
+  // 权重树和加载状态
+  const [weightTree, setWeightTree] = useState<WeightTreeSelectOption[]>([]);
   const [weightsLoading, setWeightsLoading] = useState(true);
 
   // 推理状态
@@ -111,6 +112,10 @@ const InferenceView: React.FC = () => {
   const [uploadedImageUrl, setUploadedImageUrl] = useState<string | null>(null);
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  // 图像尺寸（用于检测框坐标计算）
+  const [imageDimensions, setImageDimensions] = useState<{naturalWidth: number, naturalHeight: number} | null>(null);
+  const imageRef = useRef<HTMLImageElement>(null);
 
   // 置信度阈值
   const [confidenceThreshold, setConfidenceThreshold] = useState<number>(0.5);
@@ -209,7 +214,14 @@ const InferenceView: React.FC = () => {
     }
 
     if (status) {
-      setInferenceStatus(status);
+      // 如果保存的状态是 processing，说明页面刷新时推理被打断了
+      // 重置为 idle 状态，避免界面卡在"推理中"
+      if (status === 'processing') {
+        setInferenceStatus('idle');
+        setErrorMessage(null);
+      } else {
+        setInferenceStatus(status);
+      }
     }
   }, []);
 
@@ -257,7 +269,13 @@ const InferenceView: React.FC = () => {
     }
 
     if (status) {
-      setBatchInferenceStatus(status);
+      // 如果保存的状态是 processing，说明页面刷新时推理被打断了
+      // 重置为 idle 状态，避免界面卡在"推理中"
+      if (status === 'processing') {
+        setBatchInferenceStatus('idle');
+      } else {
+        setBatchInferenceStatus(status);
+      }
     }
   }, []);
 
@@ -279,34 +297,52 @@ const InferenceView: React.FC = () => {
     }
   }, [mode, batchImages.length]);
 
-  // 加载权重列表
+  // 加载权重树
   useEffect(() => {
-    const loadWeights = async () => {
+    const loadWeightTree = async () => {
       setWeightsLoading(true);
       try {
-        const weights = await inferenceService.getWeights();
-        setAvailableWeights(weights);
+        const tree = await inferenceService.getWeightTree();
+        setWeightTree(tree);
         // 恢复之前选择的权重
         const savedWeightId = localStorage.getItem(LS_KEYS.SELECTED_WEIGHT);
         if (savedWeightId) {
           const num = parseInt(savedWeightId);
-          if (weights.find(w => w.id === num)) {
+          if (findWeightInTree(tree, num)) {
             setSelectedWeightId(num);
-          } else if (weights.length > 0) {
-            setSelectedWeightId(weights[0].id);
+          } else if (tree.length > 0) {
+            setSelectedWeightId(tree[0].id);
           }
-        } else if (weights.length > 0) {
-          setSelectedWeightId(weights[0].id);
+        } else if (tree.length > 0) {
+          setSelectedWeightId(tree[0].id);
         }
       } catch (error) {
-        console.error('加载权重列表失败:', error);
+        console.error('加载权重树失败:', error);
         showNotification("加载权重列表失败", "error");
       } finally {
         setWeightsLoading(false);
       }
     };
-    loadWeights();
+    loadWeightTree();
   }, []);
+
+  // 辅助函数：在权重树中查找权重
+  const findWeightInTree = (tree: WeightTreeSelectOption[], id: number): WeightTreeSelectOption | null => {
+    for (const weight of tree) {
+      if (weight.id === id) return weight;
+      if (weight.children) {
+        const found = findWeightInTree(weight.children, id);
+        if (found) return found;
+      }
+    }
+    return null;
+  };
+
+  // 获取选中的权重信息
+  const selectedWeight = useMemo(() => {
+    if (!selectedWeightId) return null;
+    return findWeightInTree(weightTree, selectedWeightId);
+  }, [weightTree, selectedWeightId]);
 
   // 恢复保存的模式和状态
   useEffect(() => {
@@ -336,10 +372,10 @@ const InferenceView: React.FC = () => {
   const isLocked = streamStatus === 'live';
 
   // Derive task type from selected weight
-  const taskType = useMemo(() => {
-      const w = availableWeights.find(w => w.id === selectedWeightId);
-      return w ? w.task_type : 'detection';
-  }, [availableWeights, selectedWeightId]);
+  // 获取实际的任务类型（从推理结果中获取）
+  const actualTaskType: 'classification' | 'detection' = useMemo(() => {
+    return inferenceResult?.task_type || 'detection';
+  }, [inferenceResult]);
 
   // Reset stream state when switching modes
   useEffect(() => {
@@ -524,6 +560,106 @@ const InferenceView: React.FC = () => {
     );
   }, [inferenceResult, confidenceThreshold]);
 
+  // 计算检测框的样式（根据图像显示尺寸和原始尺寸计算正确的缩放比例）
+  const getBboxStyle = useCallback((bbox: [number, number, number, number]) => {
+    if (!imageDimensions || !imageRef.current) {
+      return { display: 'none' };
+    }
+
+    const displayWidth = imageRef.current.clientWidth;
+    const displayHeight = imageRef.current.clientHeight;
+
+    const scaleX = displayWidth / imageDimensions.naturalWidth;
+    const scaleY = displayHeight / imageDimensions.naturalHeight;
+
+    return {
+      left: `${bbox[0] * scaleX}px`,
+      top: `${bbox[1] * scaleY}px`,
+      width: `${(bbox[2] - bbox[0]) * scaleX}px`,
+      height: `${(bbox[3] - bbox[1]) * scaleY}px`,
+    };
+  }, [imageDimensions]);
+
+  // 下载检测结果 JSON
+  const handleDownloadJson = useCallback(() => {
+    if (!inferenceResult) return;
+
+    const data = {
+      task_type: inferenceResult.task_type,
+      results: inferenceResult.results,
+      metrics: inferenceResult.metrics,
+      image_path: inferenceResult.image_path,
+      weight_id: inferenceResult.weight_id,
+      timestamp: new Date().toISOString()
+    };
+
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `inference_result_${Date.now()}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+
+    showNotification('检测结果已下载', 'success');
+  }, [inferenceResult]);
+
+  // 下载标注图片（使用 Canvas 绘制检测框）
+  const handleDownloadAnnotatedImage = useCallback(() => {
+    if (!inferenceResult || !uploadedImageUrl || !imageRef.current) return;
+
+    const img = imageRef.current;
+    const canvas = document.createElement('canvas');
+    canvas.width = img.naturalWidth;
+    canvas.height = img.naturalHeight;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    // 绘制原始图片
+    ctx.drawImage(img, 0, 0);
+
+    // 绘制检测框
+    if (actualTaskType === 'detection' && filteredResults.length > 0) {
+      filteredResults.forEach((result: any) => {
+        const bbox = result.bbox as [number, number, number, number];
+
+        // 绘制矩形框
+        ctx.strokeStyle = '#00ffff';
+        ctx.lineWidth = 3;
+        ctx.strokeRect(bbox[0], bbox[1], bbox[2] - bbox[0], bbox[3] - bbox[1]);
+
+        // 绘制标签背景
+        const label = `${result.label} ${(result.confidence * 100).toFixed(1)}%`;
+        ctx.font = 'bold 16px Arial';
+        const textWidth = ctx.measureText(label).width;
+
+        ctx.fillStyle = '#00ffff';
+        ctx.fillRect(bbox[0], bbox[1] - 24, textWidth + 8, 24);
+
+        // 绘制标签文字
+        ctx.fillStyle = '#000000';
+        ctx.fillText(label, bbox[0] + 4, bbox[1] - 6);
+      });
+    }
+
+    // 下载图片
+    canvas.toBlob((blob) => {
+      if (!blob) return;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `annotated_${Date.now()}.png`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      showNotification('标注图片已下载', 'success');
+    }, 'image/png');
+  }, [inferenceResult, uploadedImageUrl, imageRef, actualTaskType, filteredResults]);
+
   const handleScanCameras = async () => {
       setStreamStatus('scanning');
 
@@ -647,7 +783,7 @@ const InferenceView: React.FC = () => {
     // 显示真实结果
     const results = filteredResults;
 
-    if (taskType === 'detection') {
+    if (actualTaskType === 'detection') {
       return (
         <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar">
           {results.length === 0 ? (
@@ -667,7 +803,7 @@ const InferenceView: React.FC = () => {
           )}
         </div>
       );
-    } else if (taskType === 'classification') {
+    } else if (actualTaskType === 'classification') {
       return (
         <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar">
           {results.length === 0 ? (
@@ -767,24 +903,16 @@ const InferenceView: React.FC = () => {
                className="hidden"
              />
 
-             <div className={`relative ${isLocked ? 'opacity-50 pointer-events-none' : ''}`}>
-                <label className="absolute -top-2 left-2 bg-slate-900 px-1 text-[10px] text-slate-500">加载权重</label>
-                <select
-                    value={selectedWeightId || ''}
-                    onChange={(e) => setSelectedWeightId(Number(e.target.value))}
-                    disabled={isLocked || weightsLoading}
-                    className="flex-1 md:w-64 bg-slate-900 border border-slate-700 text-white text-sm rounded-lg px-3 py-2 outline-none focus:border-cyan-500 cursor-pointer disabled:cursor-not-allowed"
-                >
-                    {weightsLoading ? (
-                      <option>加载中...</option>
-                    ) : availableWeights.length === 0 ? (
-                      <option>无可用权重</option>
-                    ) : (
-                      availableWeights.map(w => (
-                        <option key={w.id} value={w.id}>{w.name} ({w.task_type})</option>
-                      ))
-                    )}
-                </select>
+             <div className={`relative pt-2 ${isLocked ? 'opacity-50 pointer-events-none' : ''}`}>
+                <label className="absolute -top-1 left-2 bg-slate-900 px-1 text-[10px] text-slate-500">加载权重</label>
+                <WeightTreeSelect
+                  options={weightTree}
+                  value={selectedWeightId}
+                  onChange={setSelectedWeightId}
+                  disabled={isLocked || weightsLoading}
+                  placeholder={weightsLoading ? '加载中...' : '请选择权重'}
+                  className="flex-1 md:w-64"
+                />
                 {isLocked && <Lock size={12} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500" />}
              </div>
 
@@ -1019,7 +1147,16 @@ const InferenceView: React.FC = () => {
                             // IMAGE / BATCH SINGLE VIEW
                             <div className="relative w-full h-full flex items-center justify-center">
                                 {uploadedImageUrl ? (
-                                  <img src={uploadedImageUrl} className="max-w-full max-h-full object-contain" alt="Inference Input" />
+                                  <img
+                                    ref={imageRef}
+                                    src={uploadedImageUrl}
+                                    className="max-w-full max-h-full object-contain"
+                                    alt="Inference Input"
+                                    onLoad={(e) => {
+                                      const img = e.target as HTMLImageElement;
+                                      setImageDimensions({ naturalWidth: img.naturalWidth, naturalHeight: img.naturalHeight });
+                                    }}
+                                  />
                                 ) : (
                                   <div className="text-center text-slate-600">
                                     <Image size={64} className="mx-auto mb-4 opacity-20" />
@@ -1027,18 +1164,13 @@ const InferenceView: React.FC = () => {
                                   </div>
                                 )}
                                 {/* 显示检测框（如果有结果） */}
-                                {inferenceResult && taskType === 'detection' && filteredResults.length > 0 && (
+                                {inferenceResult && actualTaskType === 'detection' && filteredResults.length > 0 && (
                                   <>
                                     {filteredResults.map((result: any, idx: number) => (
                                       <div
                                         key={idx}
                                         className="absolute border-2 border-cyan-400 bg-cyan-400/10 hover:bg-cyan-400/20 transition-colors cursor-pointer"
-                                        style={{
-                                          left: `${result.bbox[0] / 8}px`, // 假设原始尺寸是显示尺寸的8倍
-                                          top: `${result.bbox[1] / 8}px`,
-                                          width: `${(result.bbox[2] - result.bbox[0]) / 8}px`,
-                                          height: `${(result.bbox[3] - result.bbox[1]) / 8}px`
-                                        }}
+                                        style={getBboxStyle(result.bbox)}
                                       >
                                         <span className="absolute -top-5 left-0 bg-cyan-500 text-black text-[10px] font-bold px-1.5 py-0.5 rounded whitespace-nowrap">
                                           {result.label} {(result.confidence * 100).toFixed(1)}%
@@ -1100,9 +1232,9 @@ const InferenceView: React.FC = () => {
             <div className="w-80 bg-slate-950 border-l border-slate-800 rounded-xl flex flex-col overflow-hidden shrink-0">
                <div className="p-4 border-b border-slate-800 bg-slate-900/50">
                  <h3 className="font-bold text-white flex items-center capitalize">
-                   {taskType === 'detection' && <FileText size={18} className="mr-2 text-slate-400" />}
-                   {taskType === 'classification' && <Activity size={18} className="mr-2 text-slate-400" />}
-                   {taskType} Results
+                   {actualTaskType === 'detection' && <FileText size={18} className="mr-2 text-slate-400" />}
+                   {actualTaskType === 'classification' && <Activity size={18} className="mr-2 text-slate-400" />}
+                   {actualTaskType} Results
                  </h3>
                </div>
                
@@ -1112,10 +1244,18 @@ const InferenceView: React.FC = () => {
                {/* Unified Download Area (Conditionally Hidden for Stream) */}
                {mode !== 'stream' && (
                    <div className="p-4 border-t border-slate-800 space-y-2">
-                     <button className="w-full py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold rounded border border-slate-700 transition-colors flex items-center justify-center">
+                     <button
+                       onClick={handleDownloadJson}
+                       disabled={!inferenceResult}
+                       className="w-full py-2 bg-slate-800 hover:bg-slate-700 disabled:bg-slate-900 disabled:text-slate-600 text-slate-300 disabled:cursor-not-allowed text-xs font-bold rounded border border-slate-700 transition-colors flex items-center justify-center"
+                     >
                        <Download size={14} className="mr-2" /> 下载检测结果 (JSON)
                      </button>
-                     <button className="w-full py-2 bg-cyan-900/30 hover:bg-cyan-900/50 text-cyan-400 text-xs font-bold rounded border border-cyan-800 transition-colors flex items-center justify-center">
+                     <button
+                       onClick={handleDownloadAnnotatedImage}
+                       disabled={!inferenceResult || !uploadedImageUrl}
+                       className="w-full py-2 bg-cyan-900/30 hover:bg-cyan-900/50 disabled:bg-slate-900 disabled:text-slate-600 text-cyan-400 disabled:cursor-not-allowed text-xs font-bold rounded border border-cyan-800 transition-colors flex items-center justify-center"
+                     >
                        <Image size={14} className="mr-2" /> 下载标注图片
                      </button>
                    </div>
